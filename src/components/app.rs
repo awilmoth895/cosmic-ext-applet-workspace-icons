@@ -525,11 +525,13 @@ impl IcedWorkspacesApplet {
                 component.base
             });
             background.a = inactive_pill_opacity(inactive_opacity_percent, hovered);
+            let mut border = Color::from(component.border);
+            border.a = inactive_pill_opacity(inactive_opacity_percent, hovered);
             (
                 (!outlined_mode || hovered).then_some(Background::Color(background)),
                 component.on.into(),
                 if outlined_mode {
-                    background
+                    border
                 } else {
                     Color::TRANSPARENT
                 },
@@ -1256,7 +1258,7 @@ mod tests {
         let theme = Theme::default();
         let style = test_pill_style(&theme, false, false, false, true);
 
-        let mut expected = Color::from(theme.current_container().component.base);
+        let mut expected = Color::from(theme.current_container().component.border);
         expected.a = 0.55;
         assert_eq!(style.background, None);
         assert_eq!(style.border.color, expected);
@@ -1303,14 +1305,23 @@ mod tests {
 
         for outlined_mode in [false, true] {
             for (configured, resting_alpha, hovered_alpha) in
-                [(55, 0.55, 0.7), (90, 0.9, 1.0), (0, 0.0, 0.15)]
+                [
+                    (55, 0.55, 0.7),
+                    (90, 0.9, 1.0),
+                    (100, 1.0, 1.0),
+                    (0, 0.0, 0.15),
+                ]
             {
                 let resting =
                     test_pill_style_with_opacity(&theme, false, outlined_mode, configured);
                 let hovered =
                     test_pill_style_with_opacity(&theme, true, outlined_mode, configured);
 
-                let mut resting_color = Color::from(theme.current_container().component.base);
+                let mut resting_color = Color::from(if outlined_mode {
+                    theme.current_container().component.border
+                } else {
+                    theme.current_container().component.base
+                });
                 resting_color.a = resting_alpha;
                 let mut hovered_color = Color::from(theme.current_container().component.hover);
                 hovered_color.a = hovered_alpha;

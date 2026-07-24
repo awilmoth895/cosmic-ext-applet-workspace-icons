@@ -36,7 +36,7 @@ configured outline thickness.
 |---|---|---|---|---|---|---|---|
 | Inactive | Filled | Resting | `current_container().component.base` at `P` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
 | Inactive | Filled | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
-| Inactive | Outlined | Resting | None | `current_container().component.base` at `P`, width `W` | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Outlined | Resting | None | `current_container().component.border` at `P`, width `W` | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
 | Inactive | Outlined | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
 | Active | Filled | Resting | `accent_button.base` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
 | Active | Filled | Hovered | `accent_button.hover` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
