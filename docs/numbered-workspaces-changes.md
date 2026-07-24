@@ -498,16 +498,16 @@ File:
 The original applet styled active and urgent workspaces, and otherwise used a
 plain background.
 
-Workspace Icons keeps active and urgent behavior, then adds a subtle visual
-treatment for inactive workspaces that contain apps:
+Workspace Icons retains the active and urgent state distinctions, then adds
+configurable filled and outlined treatments for inactive workspaces:
 
-- a `small_widget` background
-- a `divider` border
+- `current_container().component.base` supplies the resting color
+- `current_container().component.hover` supplies the hovered color
+- the configured inactive-pill opacity controls resting alpha, with hover adding
+  15 percentage points up to 100%
 
-Inactive empty workspaces remain visually lighter.
-
-This makes occupied workspaces easier to scan without stealing the stronger
-active-workspace styling.
+This keeps inactive pills aligned with COSMIC's semantic component states
+without stealing the stronger active-workspace styling.
 
 ## Preserved Workspace Controls
 

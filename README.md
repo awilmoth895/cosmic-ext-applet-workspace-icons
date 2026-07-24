@@ -25,6 +25,32 @@ number so you can see where windows are at a glance.
 - Highlights icons for apps with maximized windows.
 - Preserves workspace switching, scrolling, and workspace overview behavior.
 
+## Pill Colors
+
+Pill colors use semantic COSMIC theme tokens, so their rendered values follow
+the user's current theme. In the table below, `P` is the configured inactive
+pill opacity, `H` is `P + 15` percentage points capped at 100%, and `W` is the
+configured outline thickness.
+
+| State | Mode | Interaction | Fill | Border | Workspace number | Other foreground | Separator |
+|---|---|---|---|---|---|---|---|
+| Inactive | Filled | Resting | `current_container().component.base` at `P` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Filled | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Outlined | Resting | None | `current_container().component.base` at `P`, width `W` | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Outlined | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Active | Filled | Resting | `accent_button.base` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
+| Active | Filled | Hovered | `accent_button.hover` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
+| Active | Outlined | Resting | None | `accent_button.base`, width `W` | `accent_text`, falling back to `accent_button.base` | `current_container().component.on` | `accent_text`, falling back to `accent_button.base` |
+| Active | Outlined | Hovered | `accent_button.hover` | None | `accent_button.on` | `accent_button.on` | `accent_button.on` |
+| Urgent | Filled | Resting | `palette.neutral_3` | `destructive_button.base`, 1 px | `destructive_button.base` | `destructive_button.base` | `destructive_button.base` |
+| Urgent | Filled | Hovered | `current_container().component.hover` at native alpha | `destructive_button.base`, 1 px | `destructive_button.base` | `destructive_button.base` | `destructive_button.base` |
+| Urgent | Outlined | Resting | None | `destructive_button.base`, width `W` | `destructive_button.base` | `destructive_button.base` | `destructive_button.base` |
+| Urgent | Outlined | Hovered | `current_container().component.hover` at native alpha | `destructive_button.base`, width `W` | `destructive_button.base` | `destructive_button.base` | `destructive_button.base` |
+
+Hovered outlined active and inactive pills remove their border after filling to
+avoid a visible seam. Urgent pills keep their destructive border on hover. If a
+workspace is both active and urgent, active styling takes precedence.
+
 ## Install From Source
 
 Requires COSMIC Desktop development dependencies and a Rust toolchain.

@@ -76,6 +76,7 @@ const MINIMIZED_ICON_OPACITY: f32 = 0.45;
 const MAXIMIZED_HIGHLIGHT_SCALE: f32 = 1.28;
 const MAXIMIZED_ICON_GLOW_OPACITY: f32 = 0.24;
 const INACTIVE_PILL_HOVER_OPACITY_INCREASE_PERCENT: u8 = 15;
+const URGENT_FILLED_BORDER_WIDTH: f32 = 1.0;
 const VERSION_TEXT_OPACITY: f32 = 0.45;
 const XL_ICON_SIZE_THRESHOLD: f32 = 40.0;
 const XL_WORKSPACE_NUMBER_FONT_SIZE: f32 = 33.0;
@@ -465,6 +466,7 @@ impl IcedWorkspacesApplet {
         inactive_opacity_percent: u8,
     ) -> container::Style {
         let cosmic = theme.cosmic();
+        let urgent = urgent && !active;
         let (background, text_color, border_color, border_width) = if active && outlined_mode {
             let component = &cosmic.accent_button;
             let border_color = Color::from(if hovered {
@@ -498,29 +500,30 @@ impl IcedWorkspacesApplet {
                 Color::TRANSPARENT,
                 0.0,
             )
-        } else if !active && urgent {
+        } else if urgent {
             let color = Color::from(if hovered {
                 theme.current_container().component.hover
             } else {
                 cosmic.palette.neutral_3
             });
+            let destructive = cosmic.destructive_button.base.into();
             (
                 (!outlined_mode || hovered).then_some(Background::Color(color)),
-                cosmic.destructive_button.base.into(),
-                if outlined_mode {
-                    color
-                } else {
-                    Color::TRANSPARENT
-                },
+                destructive,
+                destructive,
                 if outlined_mode {
                     outlined_border_width
                 } else {
-                    0.0
+                    URGENT_FILLED_BORDER_WIDTH
                 },
             )
         } else {
             let component = &theme.current_container().component;
-            let mut background = Color::from(component.hover);
+            let mut background = Color::from(if hovered {
+                component.hover
+            } else {
+                component.base
+            });
             background.a = inactive_pill_opacity(inactive_opacity_percent, hovered);
             (
                 (!outlined_mode || hovered).then_some(Background::Color(background)),
@@ -538,7 +541,7 @@ impl IcedWorkspacesApplet {
             )
         };
 
-        let border_color = if outlined_mode && hovered {
+        let border_color = if outlined_mode && hovered && !urgent {
             match background.as_ref() {
                 Some(Background::Color(color)) => *color,
                 _ => border_color,
@@ -546,7 +549,7 @@ impl IcedWorkspacesApplet {
         } else {
             border_color
         };
-        let border_width = if outlined_mode && hovered {
+        let border_width = if outlined_mode && hovered && !urgent {
             0.0
         } else {
             border_width
@@ -585,11 +588,14 @@ impl IcedWorkspacesApplet {
     fn workspace_divider_style(
         theme: &Theme,
         active: bool,
+        urgent: bool,
         outlined_mode: bool,
         hovered: bool,
     ) -> container::Style {
         let color = if active && outlined_mode {
             Self::outlined_active_foreground(theme, hovered)
+        } else if urgent && !active {
+            theme.cosmic().destructive_button.base.into()
         } else {
             theme.current_container().divider.into()
         };
@@ -1028,6 +1034,7 @@ impl IcedWorkspacesApplet {
                             Self::workspace_divider_style(
                                 theme,
                                 active,
+                                urgent,
                                 outlined_mode,
                                 hovered,
                             )
@@ -1046,6 +1053,7 @@ impl IcedWorkspacesApplet {
                             Self::workspace_divider_style(
                                 theme,
                                 active,
+                                urgent,
                                 outlined_mode,
                                 hovered,
                             )
@@ -1133,11 +1141,12 @@ mod tests {
     use super::{
         APP_GROUP_LEADING_PADDING, APP_GROUP_TRAILING_PADDING, APP_ICON_SPACING, Background, Color,
         IcedWorkspacesApplet, Layout, MAX_INACTIVE_PILL_OPACITY_PERCENT, MAX_PILL_BORDER_WIDTH,
-        MIN_PILL_BORDER_WIDTH, Theme, WORKSPACE_CONTENT_SPACING, WORKSPACE_LEADING_PADDING,
-        WORKSPACE_LIST_EDGE_PADDING, WORKSPACE_TRAILING_PADDING, inactive_pill_opacity,
-        inactive_pill_opacity_percent, informative_titles, occupied_number_section_major_size,
-        oriented_padding, pill_border_width, pill_spacing_percent, workspace_list_padding,
-        workspace_number_font_size, workspace_overview_command,
+        MIN_PILL_BORDER_WIDTH, Theme, URGENT_FILLED_BORDER_WIDTH, WORKSPACE_CONTENT_SPACING,
+        WORKSPACE_LEADING_PADDING, WORKSPACE_LIST_EDGE_PADDING, WORKSPACE_TRAILING_PADDING,
+        inactive_pill_opacity, inactive_pill_opacity_percent, informative_titles,
+        occupied_number_section_major_size, oriented_padding, pill_border_width,
+        pill_spacing_percent, workspace_list_padding, workspace_number_font_size,
+        workspace_overview_command,
     };
 
     const TEST_OUTLINED_BORDER_WIDTH: f32 = 2.0;
@@ -1224,7 +1233,7 @@ mod tests {
         let Some(Background::Color(background)) = style.background else {
             panic!("inactive pill should have a solid translucent background");
         };
-        let mut expected = Color::from(theme.current_container().component.hover);
+        let mut expected = Color::from(theme.current_container().component.base);
         expected.a = 0.55;
         assert_eq!(background, expected);
     }
@@ -1247,7 +1256,7 @@ mod tests {
         let theme = Theme::default();
         let style = test_pill_style(&theme, false, false, false, true);
 
-        let mut expected = Color::from(theme.current_container().component.hover);
+        let mut expected = Color::from(theme.current_container().component.base);
         expected.a = 0.55;
         assert_eq!(style.background, None);
         assert_eq!(style.border.color, expected);
@@ -1293,23 +1302,29 @@ mod tests {
         let theme = Theme::default();
 
         for outlined_mode in [false, true] {
-            let resting = test_pill_style_with_opacity(&theme, false, outlined_mode, 35);
-            let hovered = test_pill_style_with_opacity(&theme, true, outlined_mode, 35);
+            for (configured, resting_alpha, hovered_alpha) in
+                [(55, 0.55, 0.7), (90, 0.9, 1.0), (0, 0.0, 0.15)]
+            {
+                let resting =
+                    test_pill_style_with_opacity(&theme, false, outlined_mode, configured);
+                let hovered =
+                    test_pill_style_with_opacity(&theme, true, outlined_mode, configured);
 
-            let mut resting_color = Color::from(theme.current_container().component.hover);
-            resting_color.a = 0.35;
-            let mut hovered_color = resting_color;
-            hovered_color.a = 0.5;
+                let mut resting_color = Color::from(theme.current_container().component.base);
+                resting_color.a = resting_alpha;
+                let mut hovered_color = Color::from(theme.current_container().component.hover);
+                hovered_color.a = hovered_alpha;
 
-            if outlined_mode {
-                assert_eq!(resting.background, None);
-                assert_eq!(resting.border.color, resting_color);
-            } else {
-                assert_eq!(resting.background, Some(Background::Color(resting_color)));
-            }
-            assert_eq!(hovered.background, Some(Background::Color(hovered_color)));
-            if outlined_mode {
-                assert_eq!(hovered.border.color, hovered_color);
+                if outlined_mode {
+                    assert_eq!(resting.background, None);
+                    assert_eq!(resting.border.color, resting_color);
+                } else {
+                    assert_eq!(resting.background, Some(Background::Color(resting_color)));
+                }
+                assert_eq!(hovered.background, Some(Background::Color(hovered_color)));
+                if outlined_mode {
+                    assert_eq!(hovered.border.color, hovered_color);
+                }
             }
         }
     }
@@ -1336,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_active_and_urgent_pill_styles_unchanged() {
+    fn keeps_active_and_urgent_styles_independent_of_inactive_opacity() {
         let theme = Theme::default();
 
         for (active, urgent, hovered, outlined_mode) in [
@@ -1369,12 +1384,11 @@ mod tests {
     }
 
     #[test]
-    fn matches_each_hovered_outlined_border_to_its_own_background() {
+    fn matches_nonurgent_hovered_outlined_borders_to_their_backgrounds() {
         let theme = Theme::default();
         let styles = [
             test_pill_style(&theme, true, false, true, true),
             test_pill_style(&theme, false, false, true, true),
-            test_pill_style(&theme, false, true, true, true),
         ];
 
         for style in styles {
@@ -1389,10 +1403,34 @@ mod tests {
     fn removes_the_redundant_outline_when_an_outlined_pill_is_filled_on_hover() {
         let theme = Theme::default();
 
-        for (active, urgent) in [(true, false), (false, false), (false, true)] {
+        for (active, urgent) in [(true, false), (false, false)] {
             let style = test_pill_style(&theme, active, urgent, true, true);
             assert!(style.background.is_some());
             assert_eq!(style.border.width, 0.0);
+        }
+    }
+
+    #[test]
+    fn gives_urgent_pills_a_destructive_text_and_border() {
+        let theme = Theme::default();
+        let destructive = Color::from(theme.cosmic().destructive_button.base);
+
+        for outlined_mode in [false, true] {
+            for hovered in [false, true] {
+                let style = test_pill_style(&theme, false, true, hovered, outlined_mode);
+
+                assert_eq!(style.text_color, Some(destructive));
+                assert_eq!(style.icon_color, Some(destructive));
+                assert_eq!(style.border.color, destructive);
+                assert_eq!(
+                    style.border.width,
+                    if outlined_mode {
+                        TEST_OUTLINED_BORDER_WIDTH
+                    } else {
+                        URGENT_FILLED_BORDER_WIDTH
+                    }
+                );
+            }
         }
     }
 
@@ -1465,7 +1503,8 @@ mod tests {
     #[test]
     fn gives_the_active_divider_an_accent_color_in_outlined_mode() {
         let theme = Theme::default();
-        let style = IcedWorkspacesApplet::workspace_divider_style(&theme, true, true, false);
+        let style =
+            IcedWorkspacesApplet::workspace_divider_style(&theme, true, false, true, false);
         let expected = theme
             .cosmic()
             .accent_text
@@ -1477,12 +1516,37 @@ mod tests {
     #[test]
     fn gives_the_active_divider_an_on_accent_color_when_hovered() {
         let theme = Theme::default();
-        let style = IcedWorkspacesApplet::workspace_divider_style(&theme, true, true, true);
+        let style =
+            IcedWorkspacesApplet::workspace_divider_style(&theme, true, false, true, true);
 
         assert_eq!(
             style.background,
             Some(Background::Color(theme.cosmic().accent_button.on.into()))
         );
+    }
+
+    #[test]
+    fn gives_the_urgent_divider_a_destructive_color() {
+        let theme = Theme::default();
+
+        for outlined_mode in [false, true] {
+            for hovered in [false, true] {
+                let style = IcedWorkspacesApplet::workspace_divider_style(
+                    &theme,
+                    false,
+                    true,
+                    outlined_mode,
+                    hovered,
+                );
+
+                assert_eq!(
+                    style.background,
+                    Some(Background::Color(
+                        theme.cosmic().destructive_button.base.into()
+                    ))
+                );
+            }
+        }
     }
 
     #[test]
