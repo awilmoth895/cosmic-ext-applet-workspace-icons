@@ -6,4 +6,5 @@ pill-style-filled = Filled
 pill-style-outlined = Outlined
 pill-outline-thickness = Outline thickness
 pill-spacing = Pill spacing
+inactive-pill-opacity = Inactive pill opacity
 version = Version
