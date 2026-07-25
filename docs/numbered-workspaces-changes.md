@@ -501,8 +501,7 @@ plain background.
 Workspace Icons retains the active and urgent state distinctions, then adds
 configurable filled and outlined treatments for inactive workspaces:
 
-- `current_container().component.base` supplies the resting filled color
-- `current_container().component.border` supplies the resting outline color
+- `current_container().component.base` supplies the resting color
 - `current_container().component.hover` supplies the hovered color
 - the configured inactive-pill opacity controls resting alpha, with hover adding
   15 percentage points up to 100%
