@@ -11,7 +11,7 @@ pub const MIN_PILL_BORDER_WIDTH: u8 = 0;
 pub const DEFAULT_PILL_BORDER_WIDTH: u8 = 2;
 pub const MAX_PILL_BORDER_WIDTH: u8 = 3;
 pub const MAX_PILL_SPACING_PERCENT: u8 = 10;
-pub const DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT: u8 = 55;
+pub const DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT: u8 = 25;
 pub const MAX_INACTIVE_PILL_CONTRAST_PERCENT: u8 = 100;
 pub const INACTIVE_PILL_CONTRAST_STEP_PERCENT: u8 = 5;
 
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_fifty_five_percent_inactive_pill_contrast_by_default() {
+    fn uses_twenty_five_percent_inactive_pill_contrast_by_default() {
         assert_eq!(
             WorkspacesAppletConfig::default().inactive_pill_contrast_percent,
             DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT
