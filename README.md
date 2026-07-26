@@ -28,16 +28,17 @@ number so you can see where windows are at a glance.
 ## Pill Colors
 
 Pill colors use semantic COSMIC theme tokens, so their rendered values follow
-the user's current theme. In the table below, `P` is the configured inactive
-pill opacity, `H` is `P + 15` percentage points capped at 100%, and `W` is the
-configured outline thickness.
+the user's current theme. In the table below, `mix(A, B, X)` is an opaque,
+perceptual color interpolation from `A` at 0% toward `B` at 100%, `P` is the
+configured inactive pill contrast, `H` is `P + 15` percentage points capped at
+100%, and `W` is the configured outline thickness.
 
 | State | Mode | Interaction | Fill | Border | Workspace number | Other foreground | Separator |
 |---|---|---|---|---|---|---|---|
-| Inactive | Filled | Resting | `current_container().component.base` at `P` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
-| Inactive | Filled | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
-| Inactive | Outlined | Resting | None | `current_container().component.base` at `P`, width `W` | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
-| Inactive | Outlined | Hovered | `current_container().component.hover` at `H` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Filled | Resting | `mix(current_container().base, current_container().component.border, P)` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Filled | Hovered | `mix(current_container().component.hover, current_container().component.border, H)` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Outlined | Resting | None | `mix(current_container().base, current_container().component.border, P)`, width `W` | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
+| Inactive | Outlined | Hovered | `mix(current_container().component.hover, current_container().component.border, H)` | None | `current_container().component.on` | `current_container().component.on` | `current_container().divider` |
 | Active | Filled | Resting | `accent_button.base` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
 | Active | Filled | Hovered | `accent_button.hover` | None | `accent_button.on` | `accent_button.on` | `current_container().divider` |
 | Active | Outlined | Resting | None | `accent_button.base`, width `W` | `accent_text`, falling back to `accent_button.base` | `current_container().component.on` | `accent_text`, falling back to `accent_button.base` |
@@ -50,6 +51,12 @@ configured outline thickness.
 Hovered outlined active and inactive pills remove their border after filling to
 avoid a visible seam. Urgent pills keep their destructive border on hover. If a
 workspace is both active and urgent, active styling takes precedence.
+
+Inactive pill colors are always fully opaque. The contrast control changes the
+color itself rather than blending it with the panel, which keeps the result
+stable on transparent and frosted-glass panels. At 0%, a resting pill matches
+the current container's base color; at 100%, it reaches the component border
+color.
 
 ## Install From Source
 

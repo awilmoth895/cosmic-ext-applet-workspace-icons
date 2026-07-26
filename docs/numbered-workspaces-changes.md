@@ -501,13 +501,17 @@ plain background.
 Workspace Icons retains the active and urgent state distinctions, then adds
 configurable filled and outlined treatments for inactive workspaces:
 
-- `current_container().component.base` supplies the resting color
-- `current_container().component.hover` supplies the hovered color
-- the configured inactive-pill opacity controls resting alpha, with hover adding
-  15 percentage points up to 100%
+- the resting color is an opaque, perceptual mix from
+  `current_container().base` toward
+  `current_container().component.border`
+- the hovered color is the same mix starting from
+  `current_container().component.hover`
+- the configured inactive-pill contrast controls the mix amount, with hover
+  adding 15 percentage points up to 100%
 
 This keeps inactive pills aligned with COSMIC's semantic component states
-without stealing the stronger active-workspace styling.
+without stealing the stronger active-workspace styling or depending on the
+content behind transparent and frosted-glass panels.
 
 ## Preserved Workspace Controls
 
