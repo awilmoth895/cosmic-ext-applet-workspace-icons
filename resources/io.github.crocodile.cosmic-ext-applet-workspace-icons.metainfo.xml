@@ -83,6 +83,14 @@
     <keyword xml:lang="cs">Ikony</keyword>
   </keywords>
   <releases>
+    <release type="stable" version="1.2.0" date="2026-07-29">
+      <description>
+        <ul>
+          <li>Choose whether to show one icon per application or per open window.</li>
+          <li>Configure the number of icons shown in each workspace before the remaining count appears.</li>
+        </ul>
+      </description>
+    </release>
     <release type="stable" version="1.1.2" date="2026-07-25">
       <description>
         <ul>
