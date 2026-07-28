@@ -149,14 +149,16 @@ Files:
 - `i18n/en/cosmic_ext_applet_workspace_icons.ftl`
 
 The original applet had no user settings. Workspace Icons adds
-`WorkspacesAppletConfig` with three booleans:
+`WorkspacesAppletConfig` with three icon-display booleans:
 
 - `dim_minimized_window_icons`
 - `highlight_maximized_window_icons`
 - `show_one_icon_per_application`
 
 All three default to `true`, preserving one icon per application. Disabling the
-third setting shows separate icons for individual windows.
+third setting shows separate icons for individual windows. The
+`max_visible_icons` setting controls when the icon strip switches to `+N`; it
+defaults to `5` and is clamped to the supported range of `1` through `16`.
 
 `src/components/app.rs` loads the config during app initialization:
 
@@ -172,14 +174,14 @@ The app also watches for external config changes through
 `watch_config::<WorkspacesAppletConfig>()`. That means if COSMIC config changes
 outside this process, the applet can update without a restart.
 
-Right-clicking the applet opens a settings popup. The popup contains three
-toggles:
+Right-clicking the applet opens a settings popup. Its icon controls include:
 
 - Dim minimized window icons.
 - Highlight maximized window icons.
 - Show one icon per application.
+- Visible icons per workspace, using a numeric stepper.
 
-When a toggle changes, `write_config()` persists it through
+When a setting changes, `write_config()` persists it through
 `cosmic-config`.
 
 ## Wayland Data Model
@@ -461,7 +463,8 @@ under it:
 
 Only a limited number of icon slots are shown:
 
-- up to `MAX_VISIBLE_ICONS`, currently `5`
+- five by default
+- configurable from `MIN_VISIBLE_ICONS` (`1`) through `MAX_VISIBLE_ICONS` (`16`)
 
 If there are more icons than visible slots, the layout shows `+N`. A slot is an
 application group when one-icon-per-application is enabled and an individual

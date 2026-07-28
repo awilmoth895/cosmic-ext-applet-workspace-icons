@@ -21,7 +21,7 @@ number so you can see where windows are at a glance.
 - Displays application icons beside each workspace number.
 - Can show separate icons for each open window by disabling application grouping.
 - Associates windows with the correct workspace and monitor.
-- Shows an overflow count when a workspace has more than five visible icon slots.
+- Configures up to sixteen visible icons per workspace before showing an overflow count.
 - Dims minimised window icons.
 - Highlights maximised window icons.
 - Preserves workspace switching, scrolling, and workspace overview behavior.

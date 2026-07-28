@@ -44,8 +44,8 @@ use cosmic::{
 use crate::{
     config::{
         self, INACTIVE_PILL_CONTRAST_STEP_PERCENT, MAX_INACTIVE_PILL_CONTRAST_PERCENT,
-        MAX_PILL_BORDER_WIDTH, MAX_PILL_SPACING_PERCENT, MIN_PILL_BORDER_WIDTH, WorkspacePillStyle,
-        WorkspacesAppletConfig,
+        MAX_PILL_BORDER_WIDTH, MAX_PILL_SPACING_PERCENT, MAX_VISIBLE_ICONS, MIN_PILL_BORDER_WIDTH,
+        MIN_VISIBLE_ICONS, WorkspacePillStyle, WorkspacesAppletConfig,
     },
     wayland::WorkspaceEvent,
     wayland_subscription::{WorkspacesUpdate, workspaces},
@@ -62,7 +62,6 @@ use std::{
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
 const SCROLL_RATE_LIMIT: Duration = Duration::from_millis(200);
-const MAX_VISIBLE_ICONS: usize = 5;
 const APP_ICON_SPACING: f32 = 4.0;
 const APP_GROUP_LEADING_PADDING: f32 = 4.0;
 const APP_GROUP_TRAILING_PADDING: f32 = 0.0;
@@ -313,8 +312,12 @@ fn display_icons<'a>(
     }
 }
 
-fn visible_icon_counts(icon_count: usize) -> (usize, usize) {
-    let visible = icon_count.min(MAX_VISIBLE_ICONS);
+fn visible_icon_limit(value: u8) -> u8 {
+    value.clamp(MIN_VISIBLE_ICONS, MAX_VISIBLE_ICONS)
+}
+
+fn visible_icon_counts(icon_count: usize, limit: u8) -> (usize, usize) {
+    let visible = icon_count.min(usize::from(visible_icon_limit(limit)));
     (visible, icon_count.saturating_sub(visible))
 }
 
@@ -582,6 +585,31 @@ impl IcedWorkspacesApplet {
             .into()
     }
 
+    fn max_visible_icons_stepper(&self) -> Element<'_, Message> {
+        let value = self.config.max_visible_icons;
+        let decrement: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(DECREASE_ICON_SVG))
+                .on_press_maybe(
+                    (value > MIN_VISIBLE_ICONS)
+                        .then(|| Message::MaxVisibleIcons(value - 1)),
+                )
+                .into();
+        let increment: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(INCREASE_ICON_SVG))
+                .on_press_maybe(
+                    (value < MAX_VISIBLE_ICONS)
+                        .then(|| Message::MaxVisibleIcons(value + 1)),
+                )
+                .into();
+        let value = container(self.core.applet.text(value.to_string()).size(14))
+            .center_x(Length::Fixed(48.0))
+            .align_y(Alignment::Center);
+
+        row![decrement, value, increment]
+            .align_y(Alignment::Center)
+            .into()
+    }
+
     fn sync_pill_style_model(&mut self) {
         self.pill_style_model
             .activate_position(match self.config.pill_style {
@@ -833,7 +861,8 @@ impl IcedWorkspacesApplet {
         }
 
         let icon_size = self.app_icon_size();
-        let (visible_count, overflow_count) = visible_icon_counts(icons.len());
+        let (visible_count, overflow_count) =
+            visible_icon_counts(icons.len(), self.config.max_visible_icons);
         let visible_size = icons
             .iter()
             .take(visible_count)
@@ -1053,7 +1082,8 @@ impl IcedWorkspacesApplet {
             width * f32::from(self.config.pill_spacing_percent) / 100.0
         };
 
-        let (visible_icon_count, overflow_count) = visible_icon_counts(icons.len());
+        let (visible_icon_count, overflow_count) =
+            visible_icon_counts(icons.len(), self.config.max_visible_icons);
         let icon_size = self.app_icon_size();
         let mut icon_elements = icons
             .iter()
@@ -1243,7 +1273,9 @@ impl IcedWorkspacesApplet {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT;
+    use crate::config::{
+        DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT, MAX_VISIBLE_ICONS, MIN_VISIBLE_ICONS,
+    };
 
     use super::{
         APP_GROUP_LEADING_PADDING, APP_GROUP_TRAILING_PADDING, APP_ICON_SPACING, Background, Color,
@@ -1254,8 +1286,8 @@ mod tests {
         inactive_pill_contrast_color, inactive_pill_contrast_percent, informative_titles,
         occupied_number_section_major_size, oriented_padding, pill_border_width,
         pill_spacing_percent, should_retain_toplevel_placement, visible_icon_counts,
-        workspace_list_padding, workspace_number_font_size, workspace_overview_command,
-        workspace_tooltip,
+        visible_icon_limit, workspace_list_padding, workspace_number_font_size,
+        workspace_overview_command, workspace_tooltip,
     };
 
     const TEST_OUTLINED_BORDER_WIDTH: f32 = 2.0;
@@ -1346,9 +1378,18 @@ mod tests {
 
     #[test]
     fn limits_icon_slots_and_reports_the_remaining_count() {
-        assert_eq!(visible_icon_counts(0), (0, 0));
-        assert_eq!(visible_icon_counts(5), (5, 0));
-        assert_eq!(visible_icon_counts(8), (5, 3));
+        assert_eq!(visible_icon_counts(0, 5), (0, 0));
+        assert_eq!(visible_icon_counts(5, 5), (5, 0));
+        assert_eq!(visible_icon_counts(8, 5), (5, 3));
+        assert_eq!(visible_icon_counts(8, 3), (3, 5));
+        assert_eq!(visible_icon_counts(20, 16), (16, 4));
+    }
+
+    #[test]
+    fn clamps_visible_icon_limit_to_the_supported_range() {
+        assert_eq!(visible_icon_limit(0), MIN_VISIBLE_ICONS);
+        assert_eq!(visible_icon_limit(5), 5);
+        assert_eq!(visible_icon_limit(u8::MAX), MAX_VISIBLE_ICONS);
     }
 
     #[test]
@@ -1905,6 +1946,7 @@ enum Message {
     DimMinimizedWindowIcons(bool),
     HighlightMaximizedWindowIcons(bool),
     ShowOneIconPerApplication(bool),
+    MaxVisibleIcons(u8),
     PillStyle(segmented_button::Entity),
     PillBorderWidth(u8),
     PillSpacing(u8),
@@ -1933,6 +1975,7 @@ impl cosmic::Application for IcedWorkspacesApplet {
             .unwrap_or_default();
         config.pill_border_width = pill_border_width(config.pill_border_width);
         config.pill_spacing_percent = pill_spacing_percent(config.pill_spacing_percent);
+        config.max_visible_icons = visible_icon_limit(config.max_visible_icons);
         config.inactive_pill_contrast_percent =
             inactive_pill_contrast_percent(config.inactive_pill_contrast_percent, false);
         let pill_style_model = pill_style_model(config.pill_style);
@@ -2064,6 +2107,10 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 self.config.show_one_icon_per_application = enabled;
                 self.write_config();
             }
+            Message::MaxVisibleIcons(limit) => {
+                self.config.max_visible_icons = visible_icon_limit(limit);
+                self.write_config();
+            }
             Message::PillStyle(entity) => {
                 if let Some(style) = self
                     .pill_style_model
@@ -2091,6 +2138,7 @@ impl cosmic::Application for IcedWorkspacesApplet {
             Message::ConfigUpdated(mut config) => {
                 config.pill_border_width = pill_border_width(config.pill_border_width);
                 config.pill_spacing_percent = pill_spacing_percent(config.pill_spacing_percent);
+                config.max_visible_icons = visible_icon_limit(config.max_visible_icons);
                 config.inactive_pill_contrast_percent =
                     inactive_pill_contrast_percent(config.inactive_pill_contrast_percent, false);
                 self.config = config;
@@ -2252,6 +2300,17 @@ impl cosmic::Application for IcedWorkspacesApplet {
                     .label(crate::fl!("show-one-icon-per-application"))
                     .text_size(14)
                     .width(Length::Fill)
+            ),
+            padded_control(
+                row![
+                    self.core
+                        .applet
+                        .text(crate::fl!("max-visible-icons"))
+                        .size(14),
+                    space::horizontal(),
+                    self.max_visible_icons_stepper()
+                ]
+                .align_y(Alignment::Center)
             ),
             padded_control(divider::horizontal::default())
                 .padding([spacing.space_xxs, spacing.space_s]),

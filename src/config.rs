@@ -11,6 +11,9 @@ pub const MIN_PILL_BORDER_WIDTH: u8 = 0;
 pub const DEFAULT_PILL_BORDER_WIDTH: u8 = 2;
 pub const MAX_PILL_BORDER_WIDTH: u8 = 3;
 pub const MAX_PILL_SPACING_PERCENT: u8 = 10;
+pub const MIN_VISIBLE_ICONS: u8 = 1;
+pub const DEFAULT_VISIBLE_ICONS: u8 = 5;
+pub const MAX_VISIBLE_ICONS: u8 = 16;
 pub const DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT: u8 = 25;
 pub const MAX_INACTIVE_PILL_CONTRAST_PERCENT: u8 = 100;
 pub const INACTIVE_PILL_CONTRAST_STEP_PERCENT: u8 = 5;
@@ -32,6 +35,7 @@ pub struct WorkspacesAppletConfig {
     pub dim_minimized_window_icons: bool,
     pub highlight_maximized_window_icons: bool,
     pub show_one_icon_per_application: bool,
+    pub max_visible_icons: u8,
     pub pill_style: WorkspacePillStyle,
     pub pill_border_width: u8,
     pub pill_spacing_percent: u8,
@@ -44,6 +48,7 @@ impl Default for WorkspacesAppletConfig {
             dim_minimized_window_icons: true,
             highlight_maximized_window_icons: true,
             show_one_icon_per_application: true,
+            max_visible_icons: DEFAULT_VISIBLE_ICONS,
             pill_style: WorkspacePillStyle::Filled,
             pill_border_width: DEFAULT_PILL_BORDER_WIDTH,
             pill_spacing_percent: 0,
@@ -96,7 +101,8 @@ impl WorkspacesAppletConfig {
 mod tests {
     use super::{
         APP_ID, DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT, DEFAULT_PILL_BORDER_WIDTH,
-        MAX_INACTIVE_PILL_CONTRAST_PERCENT, WorkspacePillStyle, WorkspacesAppletConfig,
+        DEFAULT_VISIBLE_ICONS, MAX_INACTIVE_PILL_CONTRAST_PERCENT, WorkspacePillStyle,
+        WorkspacesAppletConfig,
     };
     use cosmic_config::{Config, ConfigGet, ConfigSet, CosmicConfigEntry};
 
@@ -130,6 +136,14 @@ mod tests {
     }
 
     #[test]
+    fn shows_five_icons_before_overflow_by_default() {
+        assert_eq!(
+            WorkspacesAppletConfig::default().max_visible_icons,
+            DEFAULT_VISIBLE_ICONS
+        );
+    }
+
+    #[test]
     fn supplies_the_default_contrast_when_deserializing_an_older_config() {
         let config: WorkspacesAppletConfig = serde_json::from_str(
             r#"{
@@ -147,6 +161,7 @@ mod tests {
             DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT
         );
         assert!(config.show_one_icon_per_application);
+        assert_eq!(config.max_visible_icons, DEFAULT_VISIBLE_ICONS);
     }
 
     #[test]
@@ -169,6 +184,7 @@ mod tests {
 
         assert!(errors.is_empty());
         assert!(loaded.show_one_icon_per_application);
+        assert_eq!(loaded.max_visible_icons, DEFAULT_VISIBLE_ICONS);
     }
 
     #[test]
