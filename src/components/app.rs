@@ -266,6 +266,42 @@ impl WorkspaceApp<'_> {
     }
 }
 
+fn should_retain_toplevel_placement(
+    current_workspace_count: usize,
+    previous_workspace_count: Option<usize>,
+    sticky: bool,
+) -> bool {
+    current_workspace_count == 0
+        && previous_workspace_count.is_some_and(|count| count > 0)
+        && !sticky
+}
+
+fn retain_transient_toplevel_placements(
+    previous: &[ToplevelInfo],
+    current: &mut [ToplevelInfo],
+) {
+    for toplevel in current {
+        // COSMIC temporarily removes a moved window from its workspace and
+        // output until the grab ends. Keep its last placement across that gap.
+        let sticky = toplevel
+            .state
+            .contains(&zcosmic_toplevel_handle_v1::State::Sticky);
+        let previous = previous
+            .iter()
+            .find(|previous| previous.foreign_toplevel == toplevel.foreign_toplevel);
+
+        if should_retain_toplevel_placement(
+            toplevel.workspace.len(),
+            previous.map(|previous| previous.workspace.len()),
+            sticky,
+        ) && let Some(previous) = previous
+        {
+            toplevel.workspace.clone_from(&previous.workspace);
+            toplevel.output.clone_from(&previous.output);
+        }
+    }
+}
+
 fn informative_titles<'a>(
     app_name: &str,
     titles: impl IntoIterator<Item = &'a str>,
@@ -1161,8 +1197,8 @@ mod tests {
         WORKSPACE_LEADING_PADDING, WORKSPACE_LIST_EDGE_PADDING, WORKSPACE_TRAILING_PADDING,
         inactive_pill_contrast_color, inactive_pill_contrast_percent, informative_titles,
         occupied_number_section_major_size, oriented_padding, pill_border_width,
-        pill_spacing_percent, workspace_list_padding, workspace_number_font_size,
-        workspace_overview_command,
+        pill_spacing_percent, should_retain_toplevel_placement, workspace_list_padding,
+        workspace_number_font_size, workspace_overview_command,
     };
 
     const TEST_OUTLINED_BORDER_WIDTH: f32 = 2.0;
@@ -1183,6 +1219,15 @@ mod tests {
             TEST_OUTLINED_BORDER_WIDTH,
             DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
         )
+    }
+
+    #[test]
+    fn retains_only_transient_non_sticky_toplevel_placements() {
+        assert!(should_retain_toplevel_placement(0, Some(1), false));
+        assert!(!should_retain_toplevel_placement(1, Some(1), false));
+        assert!(!should_retain_toplevel_placement(0, Some(0), false));
+        assert!(!should_retain_toplevel_placement(0, None, false));
+        assert!(!should_retain_toplevel_placement(0, Some(1), true));
     }
 
     fn test_pill_style_with_contrast(
@@ -1767,6 +1812,10 @@ impl cosmic::Application for IcedWorkspacesApplet {
                     snapshot
                         .workspaces
                         .sort_by(|w1, w2| w1.coordinates.cmp(&w2.coordinates));
+                    retain_transient_toplevel_placements(
+                        &self.toplevels,
+                        &mut snapshot.toplevels,
+                    );
                     self.workspaces = snapshot.workspaces;
                     self.toplevels = snapshot.toplevels;
                     self.output = snapshot.output;
