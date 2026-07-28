@@ -31,6 +31,7 @@ pub enum WorkspacePillStyle {
 pub struct WorkspacesAppletConfig {
     pub dim_minimized_window_icons: bool,
     pub highlight_maximized_window_icons: bool,
+    pub show_one_icon_per_application: bool,
     pub pill_style: WorkspacePillStyle,
     pub pill_border_width: u8,
     pub pill_spacing_percent: u8,
@@ -42,6 +43,7 @@ impl Default for WorkspacesAppletConfig {
         Self {
             dim_minimized_window_icons: true,
             highlight_maximized_window_icons: true,
+            show_one_icon_per_application: true,
             pill_style: WorkspacePillStyle::Filled,
             pill_border_width: DEFAULT_PILL_BORDER_WIDTH,
             pill_spacing_percent: 0,
@@ -123,6 +125,11 @@ mod tests {
     }
 
     #[test]
+    fn shows_one_icon_per_application_by_default() {
+        assert!(WorkspacesAppletConfig::default().show_one_icon_per_application);
+    }
+
+    #[test]
     fn supplies_the_default_contrast_when_deserializing_an_older_config() {
         let config: WorkspacesAppletConfig = serde_json::from_str(
             r#"{
@@ -139,6 +146,29 @@ mod tests {
             config.inactive_pill_contrast_percent,
             DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT
         );
+        assert!(config.show_one_icon_per_application);
+    }
+
+    #[test]
+    fn loads_an_older_cosmic_config_with_application_grouping_enabled() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let config = Config::with_custom_path(
+            APP_ID,
+            WorkspacesAppletConfig::VERSION,
+            directory.path().to_path_buf(),
+        )
+        .expect("version three config");
+        config
+            .set(
+                "inactive_pill_contrast_percent",
+                DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
+            )
+            .expect("existing contrast setting");
+
+        let (loaded, errors) = WorkspacesAppletConfig::load(&config);
+
+        assert!(errors.is_empty());
+        assert!(loaded.show_one_icon_per_application);
     }
 
     #[test]

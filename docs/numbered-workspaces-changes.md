@@ -28,11 +28,12 @@ The main new behavior is:
 - Show application icons beside each workspace number.
 - Group multiple windows from the same app into one icon with a count in the
   tooltip.
+- Optionally show one icon for each compositor window.
 - Dim an app icon when all windows for that app are minimized.
 - Highlight an app icon when that app has a maximized window.
-- Show overflow text when a workspace has more app groups than fit in the
+- Show overflow text when a workspace has more icon slots than fit in the
   compact strip.
-- Add a small settings popup for the minimized/maximized icon behavior.
+- Add a small settings popup for icon display behavior.
 - Package the applet as a standalone third-party applet with its own app ID,
   metadata, install commands, and Flatpak draft.
 
@@ -148,12 +149,14 @@ Files:
 - `i18n/en/cosmic_ext_applet_workspace_icons.ftl`
 
 The original applet had no user settings. Workspace Icons adds
-`WorkspacesAppletConfig` with two booleans:
+`WorkspacesAppletConfig` with three booleans:
 
 - `dim_minimized_window_icons`
 - `highlight_maximized_window_icons`
+- `show_one_icon_per_application`
 
-Both default to `true`.
+All three default to `true`, preserving one icon per application. Disabling the
+third setting shows separate icons for individual windows.
 
 `src/components/app.rs` loads the config during app initialization:
 
@@ -169,13 +172,14 @@ The app also watches for external config changes through
 `watch_config::<WorkspacesAppletConfig>()`. That means if COSMIC config changes
 outside this process, the applet can update without a restart.
 
-Right-clicking the applet opens a settings popup. The popup contains two
+Right-clicking the applet opens a settings popup. The popup contains three
 toggles:
 
 - Dim minimized window icons.
 - Highlight maximized window icons.
+- Show one icon per application.
 
-When either toggle changes, `write_config()` persists it through
+When a toggle changes, `write_config()` persists it through
 `cosmic-config`.
 
 ## Wayland Data Model
@@ -318,10 +322,8 @@ Workspace Icons introduces a derived view model:
 struct WorkspaceApp<'a> {
     app_id: &'a str,
     metadata: &'a AppMetadata,
-    window_count: usize,
-    minimized_count: usize,
-    maximized_count: usize,
     minimized_titles: Vec<&'a str>,
+    windows: Vec<WorkspaceWindowState>,
 }
 ```
 
@@ -329,7 +331,8 @@ This is not raw Wayland data. It is UI-friendly data built from toplevel
 windows.
 
 `apps_for_workspace()` loops over every toplevel and groups windows by app ID
-for a specific workspace. While grouping, it counts:
+for a specific workspace. Each group retains the state of its individual
+windows, allowing it to derive:
 
 - how many windows that app has on the workspace
 - how many are minimized
@@ -413,7 +416,9 @@ icons. Workspace Icons changes overflow calculation to walk the workspace list
 and add each button's actual major-axis size:
 
 ```rust
-used += self.workspace_button_major_size(workspace);
+let apps = self.apps_for_workspace(workspace);
+let icons = display_icons(&apps, self.config.show_one_icon_per_application);
+used += self.workspace_button_major_size(&icons);
 if used > max_major_axis_len as f32 {
     return Some(index.max(1));
 }
@@ -438,7 +443,7 @@ Workspace Icons builds richer content:
 - workspace number/name
 - vertical divider
 - row of app icons
-- overflow marker if there are too many app groups
+- overflow marker if there are too many icon slots
 
 For horizontal panels, the layout is:
 
@@ -454,13 +459,13 @@ under it:
 [ icons  ]
 ```
 
-Only a limited number of app groups are shown:
+Only a limited number of icon slots are shown:
 
-- horizontal panel: up to `MAX_VISIBLE_APPS`, currently `5`
-- vertical panel: up to `2`
+- up to `MAX_VISIBLE_ICONS`, currently `5`
 
-If there are more app groups than visible slots, horizontal layout shows `+N`
-and vertical layout shows an ellipsis.
+If there are more icons than visible slots, the layout shows `+N`. A slot is an
+application group when one-icon-per-application is enabled and an individual
+compositor window when it is disabled.
 
 ## Minimized And Maximized States
 
@@ -694,7 +699,7 @@ matter most:
 4. Desktop files are scanned so Wayland app IDs can become real names/icons.
 5. Workspace buttons are variable-width on horizontal panels.
 6. App icons visually communicate minimized and maximized state.
-7. A settings popup controls those two visual states.
+7. A settings popup controls those visual states and application icon grouping.
 8. Flatpak support needs extra host desktop/icon paths because icon lookup
    crosses the sandbox boundary.
 

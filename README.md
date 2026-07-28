@@ -19,10 +19,11 @@ number so you can see where windows are at a glance.
 ## Features
 
 - Displays application icons beside each workspace number.
+- Can show separate icons for each open window by disabling application grouping.
 - Associates windows with the correct workspace and monitor.
-- Shows an overflow count when a workspace has many applications.
-- Dims application icons when all windows for that app are minimized.
-- Highlights icons for apps with maximized windows.
+- Shows an overflow count when a workspace has more than five visible icon slots.
+- Dims minimised window icons.
+- Highlights maximised window icons.
 - Preserves workspace switching, scrolling, and workspace overview behavior.
 
 ## Pill Colors

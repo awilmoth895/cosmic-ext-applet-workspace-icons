@@ -62,7 +62,7 @@ use std::{
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
 const SCROLL_RATE_LIMIT: Duration = Duration::from_millis(200);
-const MAX_VISIBLE_APPS: usize = 5;
+const MAX_VISIBLE_ICONS: usize = 5;
 const APP_ICON_SPACING: f32 = 4.0;
 const APP_GROUP_LEADING_PADDING: f32 = 4.0;
 const APP_GROUP_TRAILING_PADDING: f32 = 0.0;
@@ -250,20 +250,107 @@ struct AppMetadata {
 struct WorkspaceApp<'a> {
     app_id: &'a str,
     metadata: &'a AppMetadata,
-    window_count: usize,
-    minimized_count: usize,
-    maximized_count: usize,
     minimized_titles: Vec<&'a str>,
+    windows: Vec<WorkspaceWindowState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkspaceWindowState {
+    minimized: bool,
+    maximized: bool,
+}
+
+#[derive(Clone, Copy)]
+struct WorkspaceIcon<'a> {
+    metadata: &'a AppMetadata,
+    minimized: bool,
+    maximized: bool,
 }
 
 impl WorkspaceApp<'_> {
+    fn window_count(&self) -> usize {
+        self.windows.len()
+    }
+
+    fn minimized_count(&self) -> usize {
+        self.windows
+            .iter()
+            .filter(|window| window.minimized)
+            .count()
+    }
+
     fn all_minimized(&self) -> bool {
-        self.window_count > 0 && self.minimized_count == self.window_count
+        !self.windows.is_empty() && self.windows.iter().all(|window| window.minimized)
     }
 
     fn has_maximized(&self) -> bool {
-        self.maximized_count > 0
+        self.windows.iter().any(|window| window.maximized)
     }
+}
+
+fn display_icons<'a>(
+    apps: &'a [WorkspaceApp<'a>],
+    show_one_icon_per_application: bool,
+) -> Vec<WorkspaceIcon<'a>> {
+    if show_one_icon_per_application {
+        apps.iter()
+            .map(|app| WorkspaceIcon {
+                metadata: app.metadata,
+                minimized: app.all_minimized(),
+                maximized: app.has_maximized(),
+            })
+            .collect()
+    } else {
+        apps.iter()
+            .flat_map(|app| {
+                app.windows.iter().map(|window| WorkspaceIcon {
+                    metadata: app.metadata,
+                    minimized: window.minimized,
+                    maximized: window.maximized,
+                })
+            })
+            .collect()
+    }
+}
+
+fn visible_icon_counts(icon_count: usize) -> (usize, usize) {
+    let visible = icon_count.min(MAX_VISIBLE_ICONS);
+    (visible, icon_count.saturating_sub(visible))
+}
+
+fn workspace_tooltip(apps: &[WorkspaceApp<'_>]) -> String {
+    let mut lines = Vec::new();
+
+    for app in apps {
+        let window_count = app.window_count();
+        let minimized_count = app.minimized_count();
+        let summary = if window_count > 1 {
+            format!("{} ×{window_count}", app.metadata.name)
+        } else {
+            app.metadata.name.clone()
+        };
+        if app.all_minimized() {
+            lines.push(format!("{summary} (minimised)"));
+        } else if minimized_count > 0 {
+            lines.push(format!("{summary} ({minimized_count} minimised)"));
+        } else {
+            lines.push(summary);
+        }
+
+        lines.extend(
+            informative_titles(&app.metadata.name, app.minimized_titles.iter().copied())
+                .into_iter()
+                .map(|title| {
+                    if app.all_minimized() {
+                        format!("  ↳ {title}")
+                    } else {
+                        format!("  ↳ {title} (minimised)")
+                    }
+                }),
+        );
+    }
+
+    lines.join("\n")
 }
 
 fn should_retain_toplevel_placement(
@@ -696,7 +783,9 @@ impl IcedWorkspacesApplet {
             if index > 0 {
                 used += WORKSPACE_BUTTON_SPACING;
             }
-            used += self.workspace_button_major_size(workspace);
+            let apps = self.apps_for_workspace(workspace);
+            let icons = display_icons(&apps, self.config.show_one_icon_per_application);
+            used += self.workspace_button_major_size(&icons);
             if used > max_major_axis_len as f32 {
                 return Some(index.max(1));
             }
@@ -738,24 +827,24 @@ impl IcedWorkspacesApplet {
         }
     }
 
-    fn app_group_major_size(&self, apps: &[WorkspaceApp<'_>]) -> f32 {
-        if apps.is_empty() {
+    fn app_group_major_size(&self, icons: &[WorkspaceIcon<'_>]) -> f32 {
+        if icons.is_empty() {
             return 0.0;
         }
 
         let icon_size = self.app_icon_size();
-        let visible_count = apps.len().min(MAX_VISIBLE_APPS);
-        let visible_size = apps
+        let (visible_count, overflow_count) = visible_icon_counts(icons.len());
+        let visible_size = icons
             .iter()
             .take(visible_count)
-            .map(|app| {
+            .map(|icon| {
                 Self::app_icon_slot_size(
                     icon_size,
-                    self.config.highlight_maximized_window_icons && app.has_maximized(),
+                    self.config.highlight_maximized_window_icons && icon.maximized,
                 )
             })
             .sum::<f32>();
-        let overflow_size = if apps.len() > visible_count {
+        let overflow_size = if overflow_count > 0 {
             self.app_icon_size() * 1.15 + APP_ICON_SPACING
         } else {
             0.0
@@ -768,16 +857,15 @@ impl IcedWorkspacesApplet {
             + APP_GROUP_TRAILING_PADDING
     }
 
-    fn workspace_button_major_size(&self, workspace: &Workspace) -> f32 {
+    fn workspace_button_major_size(&self, icons: &[WorkspaceIcon<'_>]) -> f32 {
         let base_size = self.suggested_button_size();
-        let apps = self.apps_for_workspace(workspace);
-        if !apps.is_empty() {
+        if !icons.is_empty() {
             WORKSPACE_LEADING_PADDING
                 + WORKSPACE_TRAILING_PADDING
                 + self.number_section_major_size(true)
                 + WORKSPACE_CONTENT_SPACING * 2.0
                 + WORKSPACE_DIVIDER_WIDTH
-                + self.app_group_major_size(&apps)
+                + self.app_group_major_size(icons)
         } else {
             base_size
         }
@@ -859,63 +947,30 @@ impl IcedWorkspacesApplet {
                 .contains(&zcosmic_toplevel_handle_v1::State::Maximized);
 
             if let Some(app) = apps.iter_mut().find(|app| app.app_id == toplevel.app_id) {
-                app.window_count += 1;
+                app.windows.push(WorkspaceWindowState {
+                    minimized,
+                    maximized,
+                });
                 if minimized {
-                    app.minimized_count += 1;
                     app.minimized_titles.push(&toplevel.title);
-                }
-                if maximized {
-                    app.maximized_count += 1;
                 }
             } else {
                 apps.push(WorkspaceApp {
                     app_id: toplevel.app_id.as_str(),
                     metadata,
-                    window_count: 1,
-                    minimized_count: usize::from(minimized),
-                    maximized_count: usize::from(maximized),
                     minimized_titles: minimized
                         .then_some(toplevel.title.as_str())
                         .into_iter()
                         .collect(),
+                    windows: vec![WorkspaceWindowState {
+                        minimized,
+                        maximized,
+                    }],
                 });
             }
         }
 
         apps
-    }
-
-    fn workspace_tooltip(&self, apps: &[WorkspaceApp<'_>]) -> String {
-        let mut lines = Vec::new();
-
-        for app in apps {
-            let summary = if app.window_count > 1 {
-                format!("{} ×{}", app.metadata.name, app.window_count)
-            } else {
-                app.metadata.name.clone()
-            };
-            if app.all_minimized() {
-                lines.push(format!("{summary} (minimised)"));
-            } else if app.minimized_count > 0 {
-                lines.push(format!("{summary} ({} minimised)", app.minimized_count));
-            } else {
-                lines.push(summary);
-            }
-
-            lines.extend(
-                informative_titles(&app.metadata.name, app.minimized_titles.iter().copied())
-                    .into_iter()
-                    .map(|title| {
-                        if app.all_minimized() {
-                            format!("  ↳ {title}")
-                        } else {
-                            format!("  ↳ {title} (minimised)")
-                        }
-                    }),
-            );
-        }
-
-        lines.join("\n")
     }
 
     fn app_icon(
@@ -978,7 +1033,7 @@ impl IcedWorkspacesApplet {
     fn workspace_pill_visual<'a>(
         &'a self,
         workspace: &'a Workspace,
-        apps: &[WorkspaceApp<'_>],
+        icons: &[WorkspaceIcon<'_>],
         width: f32,
         height: f32,
         hovered: bool,
@@ -998,42 +1053,42 @@ impl IcedWorkspacesApplet {
             width * f32::from(self.config.pill_spacing_percent) / 100.0
         };
 
-        let visible_app_count = apps.len().min(MAX_VISIBLE_APPS);
+        let (visible_icon_count, overflow_count) = visible_icon_counts(icons.len());
         let icon_size = self.app_icon_size();
-        let mut icons = apps
+        let mut icon_elements = icons
             .iter()
-            .take(visible_app_count)
-            .map(|app| {
+            .take(visible_icon_count)
+            .map(|icon| {
                 self.app_icon(
-                    app.metadata,
+                    icon.metadata,
                     icon_size,
-                    self.config.dim_minimized_window_icons && app.all_minimized(),
-                    self.config.highlight_maximized_window_icons && app.has_maximized(),
+                    self.config.dim_minimized_window_icons && icon.minimized,
+                    self.config.highlight_maximized_window_icons && icon.maximized,
                 )
             })
             .collect::<Vec<_>>();
-        if apps.len() > visible_app_count {
-            icons.push(
+        if overflow_count > 0 {
+            icon_elements.push(
                 self.core
                     .applet
-                    .text(format!("+{}", apps.len() - visible_app_count))
+                    .text(format!("+{overflow_count}"))
                     .size((icon_size * 0.55).max(10.0))
                     .into(),
             );
         }
         let app_strip: Element<'_, Message> = if horizontal {
-            row(icons)
+            row(icon_elements)
                 .spacing(APP_ICON_SPACING)
                 .align_y(Alignment::Center)
                 .into()
         } else {
-            column(icons)
+            column(icon_elements)
                 .spacing(APP_ICON_SPACING)
                 .align_x(Alignment::Center)
                 .into()
         };
 
-        let number_section_size = self.number_section_major_size(!apps.is_empty());
+        let number_section_size = self.number_section_major_size(!icons.is_empty());
         let number_text = self
             .core
             .applet
@@ -1063,7 +1118,7 @@ impl IcedWorkspacesApplet {
         .align_y(Alignment::Center)
         .into();
 
-        let content: Element<'_, Message> = if apps.is_empty() {
+        let content: Element<'_, Message> = if icons.is_empty() {
             number
         } else {
             let app_group: Element<'_, Message> = container(app_strip)
@@ -1119,7 +1174,7 @@ impl IcedWorkspacesApplet {
             }
         };
 
-        let has_apps = !apps.is_empty();
+        let has_apps = !icons.is_empty();
         let pill_background: Element<'_, Message> = container(
             container(space::horizontal())
                 .width(Length::Fill)
@@ -1195,13 +1250,128 @@ mod tests {
         IcedWorkspacesApplet, Layout, MAX_INACTIVE_PILL_CONTRAST_PERCENT, MAX_PILL_BORDER_WIDTH,
         MIN_PILL_BORDER_WIDTH, Theme, URGENT_FILLED_BORDER_WIDTH, WORKSPACE_CONTENT_SPACING,
         WORKSPACE_LEADING_PADDING, WORKSPACE_LIST_EDGE_PADDING, WORKSPACE_TRAILING_PADDING,
+        AppMetadata, WorkspaceApp, WorkspaceWindowState, display_icons,
         inactive_pill_contrast_color, inactive_pill_contrast_percent, informative_titles,
         occupied_number_section_major_size, oriented_padding, pill_border_width,
-        pill_spacing_percent, should_retain_toplevel_placement, workspace_list_padding,
-        workspace_number_font_size, workspace_overview_command,
+        pill_spacing_percent, should_retain_toplevel_placement, visible_icon_counts,
+        workspace_list_padding, workspace_number_font_size, workspace_overview_command,
+        workspace_tooltip,
     };
 
     const TEST_OUTLINED_BORDER_WIDTH: f32 = 2.0;
+
+    fn test_app<'a>(
+        app_id: &'a str,
+        metadata: &'a AppMetadata,
+        windows: Vec<WorkspaceWindowState>,
+    ) -> WorkspaceApp<'a> {
+        WorkspaceApp {
+            app_id,
+            metadata,
+            minimized_titles: Vec::new(),
+            windows,
+        }
+    }
+
+    fn test_metadata(name: &str) -> AppMetadata {
+        AppMetadata {
+            name: name.to_owned(),
+            icon_source: cosmic::desktop::fde::IconSource::from_unknown(name),
+        }
+    }
+
+    #[test]
+    fn groups_multiple_windows_into_one_icon_by_default() {
+        let metadata = test_metadata("Browser");
+        let apps = [test_app(
+            "browser",
+            &metadata,
+            vec![
+                WorkspaceWindowState {
+                    minimized: true,
+                    maximized: false,
+                },
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: true,
+                },
+            ],
+        )];
+
+        let icons = display_icons(&apps, true);
+
+        assert_eq!(icons.len(), 1);
+        assert!(!icons[0].minimized);
+        assert!(icons[0].maximized);
+    }
+
+    #[test]
+    fn expands_windows_and_preserves_each_windows_state() {
+        let browser = test_metadata("Browser");
+        let editor = test_metadata("Editor");
+        let apps = [
+            test_app(
+                "browser",
+                &browser,
+                vec![
+                    WorkspaceWindowState {
+                        minimized: true,
+                        maximized: false,
+                    },
+                    WorkspaceWindowState {
+                        minimized: false,
+                        maximized: true,
+                    },
+                ],
+            ),
+            test_app(
+                "editor",
+                &editor,
+                vec![WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                }],
+            ),
+        ];
+
+        let icons = display_icons(&apps, false);
+
+        assert_eq!(icons.len(), 3);
+        assert_eq!(icons[0].metadata.name, "Browser");
+        assert_eq!((icons[0].minimized, icons[0].maximized), (true, false));
+        assert_eq!(icons[1].metadata.name, "Browser");
+        assert_eq!((icons[1].minimized, icons[1].maximized), (false, true));
+        assert_eq!(icons[2].metadata.name, "Editor");
+    }
+
+    #[test]
+    fn limits_icon_slots_and_reports_the_remaining_count() {
+        assert_eq!(visible_icon_counts(0), (0, 0));
+        assert_eq!(visible_icon_counts(5), (5, 0));
+        assert_eq!(visible_icon_counts(8), (5, 3));
+    }
+
+    #[test]
+    fn keeps_tooltips_grouped_when_icons_are_expanded_per_window() {
+        let browser = test_metadata("Browser");
+        let apps = [test_app(
+            "browser",
+            &browser,
+            vec![
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                },
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                },
+            ],
+        )];
+
+        assert_eq!(display_icons(&apps, false).len(), 2);
+        assert_eq!(workspace_tooltip(&apps), "Browser ×2");
+    }
 
     fn test_pill_style(
         theme: &Theme,
@@ -1734,6 +1904,7 @@ enum Message {
     PopupClosed(window::Id),
     DimMinimizedWindowIcons(bool),
     HighlightMaximizedWindowIcons(bool),
+    ShowOneIconPerApplication(bool),
     PillStyle(segmented_button::Entity),
     PillBorderWidth(u8),
     PillSpacing(u8),
@@ -1889,6 +2060,10 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 self.config.highlight_maximized_window_icons = enabled;
                 self.write_config();
             }
+            Message::ShowOneIconPerApplication(enabled) => {
+                self.config.show_one_icon_per_application = enabled;
+                self.write_config();
+            }
             Message::PillStyle(entity) => {
                 if let Some(style) = self
                     .pill_style_model
@@ -1941,15 +2116,16 @@ impl cosmic::Application for IcedWorkspacesApplet {
             let horizontal = self.core.applet.is_horizontal();
             let active = w.state.contains(ext_workspace_handle_v1::State::Active);
             let apps = self.apps_for_workspace(w);
-            let major_size = self.workspace_button_major_size(w);
+            let icons = display_icons(&apps, self.config.show_one_icon_per_application);
+            let major_size = self.workspace_button_major_size(&icons);
             let (width, height) = if horizontal {
                 (major_size, suggested_window_size.1.get() as f32)
             } else {
                 (suggested_window_size.0.get() as f32, major_size)
             };
-            let has_apps = !apps.is_empty();
-            let normal = self.workspace_pill_visual(w, &apps, width, height, false);
-            let hovered = self.workspace_pill_visual(w, &apps, width, height, true);
+            let has_apps = !icons.is_empty();
+            let normal = self.workspace_pill_visual(w, &icons, width, height, false);
+            let hovered = self.workspace_pill_visual(w, &icons, width, height, true);
             let btn = button(hover_switch(normal, hovered))
                 .width(Length::Fixed(width))
                 .height(Length::Fixed(height))
@@ -1962,7 +2138,7 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 .class(cosmic::theme::iced::Button::Transparent);
 
             let workspace_button: Element<'_, Message> = if has_apps {
-                let tooltip = self.workspace_tooltip(&apps);
+                let tooltip = workspace_tooltip(&apps);
                 self.core
                     .applet
                     .applet_tooltip(btn, tooltip, false, Message::Surface, None)
@@ -2067,6 +2243,13 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 toggler(self.config.highlight_maximized_window_icons)
                     .on_toggle(Message::HighlightMaximizedWindowIcons)
                     .label(crate::fl!("highlight-maximized-window-icons"))
+                    .text_size(14)
+                    .width(Length::Fill)
+            ),
+            padded_control(
+                toggler(self.config.show_one_icon_per_application)
+                    .on_toggle(Message::ShowOneIconPerApplication)
+                    .label(crate::fl!("show-one-icon-per-application"))
                     .text_size(14)
                     .width(Length::Fill)
             ),
