@@ -86,8 +86,12 @@
     <release type="stable" version="1.2.0" date="2026-07-29">
       <description>
         <ul>
-          <li>Choose whether to show one icon per application or per open window.</li>
-          <li>Configure the number of icons shown in each workspace before the remaining count appears.</li>
+          <li>Option to show an icon for each window of the same app</li>
+          <li>Configurable inactive pill contrast to suit different themes</li>
+          <li>Configurable 1–16 icon limit before remaining icons are shown as +N</li>
+          <li>Fixes missing frosted glass blur on settings popup</li>
+          <li>Fixes icons disappearing while dragging windows</li>
+          <li>COSMIC-aligned pill colours and urgent-workspace styling (Wayland urgent state)</li>
         </ul>
       </description>
     </release>
