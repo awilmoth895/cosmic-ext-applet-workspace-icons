@@ -17,6 +17,7 @@ use cosmic::{
     Element, Task, Theme, app,
     applet::{cosmic_panel_config::PanelAnchor, padded_control},
     cosmic_config::{Config, CosmicConfigEntry},
+    cosmic_theme::palette::{FromColor, Mix, Oklab, Srgb, Srgba},
     desktop::{IconSourceExt, fde},
     iced::core::{
         Background, Border, Color, Rectangle, Size,
@@ -42,8 +43,9 @@ use cosmic::{
 
 use crate::{
     config::{
-        self, MAX_PILL_BORDER_WIDTH, MAX_PILL_SPACING_PERCENT, MIN_PILL_BORDER_WIDTH,
-        WorkspacePillStyle, WorkspacesAppletConfig,
+        self, INACTIVE_PILL_CONTRAST_STEP_PERCENT, MAX_INACTIVE_PILL_CONTRAST_PERCENT,
+        MAX_PILL_BORDER_WIDTH, MAX_PILL_SPACING_PERCENT, MAX_VISIBLE_ICONS, MIN_PILL_BORDER_WIDTH,
+        MIN_VISIBLE_ICONS, WorkspacePillStyle, WorkspacesAppletConfig,
     },
     wayland::WorkspaceEvent,
     wayland_subscription::{WorkspacesUpdate, workspaces},
@@ -60,7 +62,6 @@ use std::{
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
 const SCROLL_RATE_LIMIT: Duration = Duration::from_millis(200);
-const MAX_VISIBLE_APPS: usize = 5;
 const APP_ICON_SPACING: f32 = 4.0;
 const APP_GROUP_LEADING_PADDING: f32 = 4.0;
 const APP_GROUP_TRAILING_PADDING: f32 = 0.0;
@@ -74,8 +75,8 @@ const WORKSPACE_DIVIDER_WIDTH: f32 = 1.0;
 const MINIMIZED_ICON_OPACITY: f32 = 0.45;
 const MAXIMIZED_HIGHLIGHT_SCALE: f32 = 1.28;
 const MAXIMIZED_ICON_GLOW_OPACITY: f32 = 0.24;
-const INACTIVE_PILL_BACKGROUND_OPACITY: f32 = 0.55;
-const INACTIVE_PILL_HOVER_BACKGROUND_OPACITY: f32 = 0.7;
+const INACTIVE_PILL_HOVER_CONTRAST_INCREASE_PERCENT: u8 = 15;
+const URGENT_FILLED_BORDER_WIDTH: f32 = 1.0;
 const VERSION_TEXT_OPACITY: f32 = 0.45;
 const XL_ICON_SIZE_THRESHOLD: f32 = 40.0;
 const XL_WORKSPACE_NUMBER_FONT_SIZE: f32 = 33.0;
@@ -248,19 +249,146 @@ struct AppMetadata {
 struct WorkspaceApp<'a> {
     app_id: &'a str,
     metadata: &'a AppMetadata,
-    window_count: usize,
-    minimized_count: usize,
-    maximized_count: usize,
     minimized_titles: Vec<&'a str>,
+    windows: Vec<WorkspaceWindowState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkspaceWindowState {
+    minimized: bool,
+    maximized: bool,
+}
+
+#[derive(Clone, Copy)]
+struct WorkspaceIcon<'a> {
+    metadata: &'a AppMetadata,
+    minimized: bool,
+    maximized: bool,
 }
 
 impl WorkspaceApp<'_> {
+    fn window_count(&self) -> usize {
+        self.windows.len()
+    }
+
+    fn minimized_count(&self) -> usize {
+        self.windows
+            .iter()
+            .filter(|window| window.minimized)
+            .count()
+    }
+
     fn all_minimized(&self) -> bool {
-        self.window_count > 0 && self.minimized_count == self.window_count
+        !self.windows.is_empty() && self.windows.iter().all(|window| window.minimized)
     }
 
     fn has_maximized(&self) -> bool {
-        self.maximized_count > 0
+        self.windows.iter().any(|window| window.maximized)
+    }
+}
+
+fn display_icons<'a>(
+    apps: &'a [WorkspaceApp<'a>],
+    show_one_icon_per_application: bool,
+) -> Vec<WorkspaceIcon<'a>> {
+    if show_one_icon_per_application {
+        apps.iter()
+            .map(|app| WorkspaceIcon {
+                metadata: app.metadata,
+                minimized: app.all_minimized(),
+                maximized: app.has_maximized(),
+            })
+            .collect()
+    } else {
+        apps.iter()
+            .flat_map(|app| {
+                app.windows.iter().map(|window| WorkspaceIcon {
+                    metadata: app.metadata,
+                    minimized: window.minimized,
+                    maximized: window.maximized,
+                })
+            })
+            .collect()
+    }
+}
+
+fn visible_icon_limit(value: u8) -> u8 {
+    value.clamp(MIN_VISIBLE_ICONS, MAX_VISIBLE_ICONS)
+}
+
+fn visible_icon_counts(icon_count: usize, limit: u8) -> (usize, usize) {
+    let visible = icon_count.min(usize::from(visible_icon_limit(limit)));
+    (visible, icon_count.saturating_sub(visible))
+}
+
+fn workspace_tooltip(apps: &[WorkspaceApp<'_>]) -> String {
+    let mut lines = Vec::new();
+
+    for app in apps {
+        let window_count = app.window_count();
+        let minimized_count = app.minimized_count();
+        let summary = if window_count > 1 {
+            format!("{} ×{window_count}", app.metadata.name)
+        } else {
+            app.metadata.name.clone()
+        };
+        if app.all_minimized() {
+            lines.push(format!("{summary} (minimised)"));
+        } else if minimized_count > 0 {
+            lines.push(format!("{summary} ({minimized_count} minimised)"));
+        } else {
+            lines.push(summary);
+        }
+
+        lines.extend(
+            informative_titles(&app.metadata.name, app.minimized_titles.iter().copied())
+                .into_iter()
+                .map(|title| {
+                    if app.all_minimized() {
+                        format!("  ↳ {title}")
+                    } else {
+                        format!("  ↳ {title} (minimised)")
+                    }
+                }),
+        );
+    }
+
+    lines.join("\n")
+}
+
+fn should_retain_toplevel_placement(
+    current_workspace_count: usize,
+    previous_workspace_count: Option<usize>,
+    sticky: bool,
+) -> bool {
+    current_workspace_count == 0
+        && previous_workspace_count.is_some_and(|count| count > 0)
+        && !sticky
+}
+
+fn retain_transient_toplevel_placements(
+    previous: &[ToplevelInfo],
+    current: &mut [ToplevelInfo],
+) {
+    for toplevel in current {
+        // COSMIC temporarily removes a moved window from its workspace and
+        // output until the grab ends. Keep its last placement across that gap.
+        let sticky = toplevel
+            .state
+            .contains(&zcosmic_toplevel_handle_v1::State::Sticky);
+        let previous = previous
+            .iter()
+            .find(|previous| previous.foreign_toplevel == toplevel.foreign_toplevel);
+
+        if should_retain_toplevel_placement(
+            toplevel.workspace.len(),
+            previous.map(|previous| previous.workspace.len()),
+            sticky,
+        ) && let Some(previous) = previous
+        {
+            toplevel.workspace.clone_from(&previous.workspace);
+            toplevel.output.clone_from(&previous.output);
+        }
     }
 }
 
@@ -293,6 +421,32 @@ fn pill_spacing_percent(value: u8) -> u8 {
 
 fn pill_border_width(value: u8) -> u8 {
     value.clamp(MIN_PILL_BORDER_WIDTH, MAX_PILL_BORDER_WIDTH)
+}
+
+fn inactive_pill_contrast_percent(value: u8, hovered: bool) -> u8 {
+    let value = value.min(MAX_INACTIVE_PILL_CONTRAST_PERCENT);
+    if hovered {
+        value
+            .saturating_add(INACTIVE_PILL_HOVER_CONTRAST_INCREASE_PERCENT)
+            .min(MAX_INACTIVE_PILL_CONTRAST_PERCENT)
+    } else {
+        value
+    }
+}
+
+fn inactive_pill_contrast_color(start: Srgba, end: Srgba, percent: u8) -> Color {
+    let percent = percent.min(MAX_INACTIVE_PILL_CONTRAST_PERCENT);
+    if percent == 0 {
+        return Color::from(start.color);
+    }
+    if percent == MAX_INACTIVE_PILL_CONTRAST_PERCENT {
+        return Color::from(end.color);
+    }
+
+    let start = Oklab::from_color(start.color);
+    let end = Oklab::from_color(end.color);
+    let factor = f32::from(percent) / f32::from(MAX_INACTIVE_PILL_CONTRAST_PERCENT);
+    Color::from(Srgb::from_color(start.mix(end, factor)))
 }
 
 fn workspace_overview_command(flatpak: bool) -> (&'static str, &'static [&'static str]) {
@@ -402,6 +556,60 @@ impl IcedWorkspacesApplet {
             .into()
     }
 
+    fn inactive_pill_contrast_stepper(&self) -> Element<'_, Message> {
+        let value = self.config.inactive_pill_contrast_percent;
+        let decrement: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(DECREASE_ICON_SVG))
+                .on_press_maybe((value > 0).then(|| {
+                    Message::InactivePillContrast(
+                        value.saturating_sub(INACTIVE_PILL_CONTRAST_STEP_PERCENT),
+                    )
+                }))
+                .into();
+        let increment: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(INCREASE_ICON_SVG))
+                .on_press_maybe((value < MAX_INACTIVE_PILL_CONTRAST_PERCENT).then(|| {
+                    Message::InactivePillContrast(
+                        value
+                            .saturating_add(INACTIVE_PILL_CONTRAST_STEP_PERCENT)
+                            .min(MAX_INACTIVE_PILL_CONTRAST_PERCENT),
+                    )
+                }))
+                .into();
+        let value = container(self.core.applet.text(format!("{value}%")).size(14))
+            .center_x(Length::Fixed(48.0))
+            .align_y(Alignment::Center);
+
+        row![decrement, value, increment]
+            .align_y(Alignment::Center)
+            .into()
+    }
+
+    fn max_visible_icons_stepper(&self) -> Element<'_, Message> {
+        let value = self.config.max_visible_icons;
+        let decrement: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(DECREASE_ICON_SVG))
+                .on_press_maybe(
+                    (value > MIN_VISIBLE_ICONS)
+                        .then(|| Message::MaxVisibleIcons(value - 1)),
+                )
+                .into();
+        let increment: Element<'_, Message> =
+            cosmic::widget::button::icon(symbolic_svg_icon(INCREASE_ICON_SVG))
+                .on_press_maybe(
+                    (value < MAX_VISIBLE_ICONS)
+                        .then(|| Message::MaxVisibleIcons(value + 1)),
+                )
+                .into();
+        let value = container(self.core.applet.text(value.to_string()).size(14))
+            .center_x(Length::Fixed(48.0))
+            .align_y(Alignment::Center);
+
+        row![decrement, value, increment]
+            .align_y(Alignment::Center)
+            .into()
+    }
+
     fn sync_pill_style_model(&mut self) {
         self.pill_style_model
             .activate_position(match self.config.pill_style {
@@ -417,8 +625,10 @@ impl IcedWorkspacesApplet {
         hovered: bool,
         outlined_mode: bool,
         outlined_border_width: f32,
+        inactive_contrast_percent: u8,
     ) -> container::Style {
         let cosmic = theme.cosmic();
+        let urgent = urgent && !active;
         let (background, text_color, border_color, border_width) = if active && outlined_mode {
             let component = &cosmic.accent_button;
             let border_color = Color::from(if hovered {
@@ -452,34 +662,36 @@ impl IcedWorkspacesApplet {
                 Color::TRANSPARENT,
                 0.0,
             )
-        } else if !active && urgent {
+        } else if urgent {
             let color = Color::from(if hovered {
                 theme.current_container().component.hover
             } else {
                 cosmic.palette.neutral_3
             });
+            let destructive = cosmic.destructive_button.base.into();
             (
                 (!outlined_mode || hovered).then_some(Background::Color(color)),
-                cosmic.destructive_button.base.into(),
-                if outlined_mode {
-                    color
-                } else {
-                    Color::TRANSPARENT
-                },
+                destructive,
+                destructive,
                 if outlined_mode {
                     outlined_border_width
                 } else {
-                    0.0
+                    URGENT_FILLED_BORDER_WIDTH
                 },
             )
         } else {
-            let component = &theme.current_container().component;
-            let mut background = Color::from(component.hover);
-            background.a = if hovered {
-                INACTIVE_PILL_HOVER_BACKGROUND_OPACITY
+            let container = theme.current_container();
+            let component = &container.component;
+            let source = if hovered {
+                component.hover
             } else {
-                INACTIVE_PILL_BACKGROUND_OPACITY
+                container.base
             };
+            let background = inactive_pill_contrast_color(
+                source,
+                component.border,
+                inactive_pill_contrast_percent(inactive_contrast_percent, hovered),
+            );
             (
                 (!outlined_mode || hovered).then_some(Background::Color(background)),
                 component.on.into(),
@@ -496,13 +708,18 @@ impl IcedWorkspacesApplet {
             )
         };
 
-        let border_color = if outlined_mode && hovered {
+        let border_color = if outlined_mode && hovered && !urgent {
             match background.as_ref() {
                 Some(Background::Color(color)) => *color,
                 _ => border_color,
             }
         } else {
             border_color
+        };
+        let border_width = if outlined_mode && hovered && !urgent {
+            0.0
+        } else {
+            border_width
         };
 
         container::Style {
@@ -538,11 +755,14 @@ impl IcedWorkspacesApplet {
     fn workspace_divider_style(
         theme: &Theme,
         active: bool,
+        urgent: bool,
         outlined_mode: bool,
         hovered: bool,
     ) -> container::Style {
         let color = if active && outlined_mode {
             Self::outlined_active_foreground(theme, hovered)
+        } else if urgent && !active {
+            theme.cosmic().destructive_button.base.into()
         } else {
             theme.current_container().divider.into()
         };
@@ -591,7 +811,9 @@ impl IcedWorkspacesApplet {
             if index > 0 {
                 used += WORKSPACE_BUTTON_SPACING;
             }
-            used += self.workspace_button_major_size(workspace);
+            let apps = self.apps_for_workspace(workspace);
+            let icons = display_icons(&apps, self.config.show_one_icon_per_application);
+            used += self.workspace_button_major_size(&icons);
             if used > max_major_axis_len as f32 {
                 return Some(index.max(1));
             }
@@ -633,24 +855,25 @@ impl IcedWorkspacesApplet {
         }
     }
 
-    fn app_group_major_size(&self, apps: &[WorkspaceApp<'_>]) -> f32 {
-        if apps.is_empty() {
+    fn app_group_major_size(&self, icons: &[WorkspaceIcon<'_>]) -> f32 {
+        if icons.is_empty() {
             return 0.0;
         }
 
         let icon_size = self.app_icon_size();
-        let visible_count = apps.len().min(MAX_VISIBLE_APPS);
-        let visible_size = apps
+        let (visible_count, overflow_count) =
+            visible_icon_counts(icons.len(), self.config.max_visible_icons);
+        let visible_size = icons
             .iter()
             .take(visible_count)
-            .map(|app| {
+            .map(|icon| {
                 Self::app_icon_slot_size(
                     icon_size,
-                    self.config.highlight_maximized_window_icons && app.has_maximized(),
+                    self.config.highlight_maximized_window_icons && icon.maximized,
                 )
             })
             .sum::<f32>();
-        let overflow_size = if apps.len() > visible_count {
+        let overflow_size = if overflow_count > 0 {
             self.app_icon_size() * 1.15 + APP_ICON_SPACING
         } else {
             0.0
@@ -663,16 +886,15 @@ impl IcedWorkspacesApplet {
             + APP_GROUP_TRAILING_PADDING
     }
 
-    fn workspace_button_major_size(&self, workspace: &Workspace) -> f32 {
+    fn workspace_button_major_size(&self, icons: &[WorkspaceIcon<'_>]) -> f32 {
         let base_size = self.suggested_button_size();
-        let apps = self.apps_for_workspace(workspace);
-        if !apps.is_empty() {
+        if !icons.is_empty() {
             WORKSPACE_LEADING_PADDING
                 + WORKSPACE_TRAILING_PADDING
                 + self.number_section_major_size(true)
                 + WORKSPACE_CONTENT_SPACING * 2.0
                 + WORKSPACE_DIVIDER_WIDTH
-                + self.app_group_major_size(&apps)
+                + self.app_group_major_size(icons)
         } else {
             base_size
         }
@@ -754,63 +976,30 @@ impl IcedWorkspacesApplet {
                 .contains(&zcosmic_toplevel_handle_v1::State::Maximized);
 
             if let Some(app) = apps.iter_mut().find(|app| app.app_id == toplevel.app_id) {
-                app.window_count += 1;
+                app.windows.push(WorkspaceWindowState {
+                    minimized,
+                    maximized,
+                });
                 if minimized {
-                    app.minimized_count += 1;
                     app.minimized_titles.push(&toplevel.title);
-                }
-                if maximized {
-                    app.maximized_count += 1;
                 }
             } else {
                 apps.push(WorkspaceApp {
                     app_id: toplevel.app_id.as_str(),
                     metadata,
-                    window_count: 1,
-                    minimized_count: usize::from(minimized),
-                    maximized_count: usize::from(maximized),
                     minimized_titles: minimized
                         .then_some(toplevel.title.as_str())
                         .into_iter()
                         .collect(),
+                    windows: vec![WorkspaceWindowState {
+                        minimized,
+                        maximized,
+                    }],
                 });
             }
         }
 
         apps
-    }
-
-    fn workspace_tooltip(&self, apps: &[WorkspaceApp<'_>]) -> String {
-        let mut lines = Vec::new();
-
-        for app in apps {
-            let summary = if app.window_count > 1 {
-                format!("{} ×{}", app.metadata.name, app.window_count)
-            } else {
-                app.metadata.name.clone()
-            };
-            if app.all_minimized() {
-                lines.push(format!("{summary} (minimised)"));
-            } else if app.minimized_count > 0 {
-                lines.push(format!("{summary} ({} minimised)", app.minimized_count));
-            } else {
-                lines.push(summary);
-            }
-
-            lines.extend(
-                informative_titles(&app.metadata.name, app.minimized_titles.iter().copied())
-                    .into_iter()
-                    .map(|title| {
-                        if app.all_minimized() {
-                            format!("  ↳ {title}")
-                        } else {
-                            format!("  ↳ {title} (minimised)")
-                        }
-                    }),
-            );
-        }
-
-        lines.join("\n")
     }
 
     fn app_icon(
@@ -873,7 +1062,7 @@ impl IcedWorkspacesApplet {
     fn workspace_pill_visual<'a>(
         &'a self,
         workspace: &'a Workspace,
-        apps: &[WorkspaceApp<'_>],
+        icons: &[WorkspaceIcon<'_>],
         width: f32,
         height: f32,
         hovered: bool,
@@ -893,42 +1082,43 @@ impl IcedWorkspacesApplet {
             width * f32::from(self.config.pill_spacing_percent) / 100.0
         };
 
-        let visible_app_count = apps.len().min(MAX_VISIBLE_APPS);
+        let (visible_icon_count, overflow_count) =
+            visible_icon_counts(icons.len(), self.config.max_visible_icons);
         let icon_size = self.app_icon_size();
-        let mut icons = apps
+        let mut icon_elements = icons
             .iter()
-            .take(visible_app_count)
-            .map(|app| {
+            .take(visible_icon_count)
+            .map(|icon| {
                 self.app_icon(
-                    app.metadata,
+                    icon.metadata,
                     icon_size,
-                    self.config.dim_minimized_window_icons && app.all_minimized(),
-                    self.config.highlight_maximized_window_icons && app.has_maximized(),
+                    self.config.dim_minimized_window_icons && icon.minimized,
+                    self.config.highlight_maximized_window_icons && icon.maximized,
                 )
             })
             .collect::<Vec<_>>();
-        if apps.len() > visible_app_count {
-            icons.push(
+        if overflow_count > 0 {
+            icon_elements.push(
                 self.core
                     .applet
-                    .text(format!("+{}", apps.len() - visible_app_count))
+                    .text(format!("+{overflow_count}"))
                     .size((icon_size * 0.55).max(10.0))
                     .into(),
             );
         }
         let app_strip: Element<'_, Message> = if horizontal {
-            row(icons)
+            row(icon_elements)
                 .spacing(APP_ICON_SPACING)
                 .align_y(Alignment::Center)
                 .into()
         } else {
-            column(icons)
+            column(icon_elements)
                 .spacing(APP_ICON_SPACING)
                 .align_x(Alignment::Center)
                 .into()
         };
 
-        let number_section_size = self.number_section_major_size(!apps.is_empty());
+        let number_section_size = self.number_section_major_size(!icons.is_empty());
         let number_text = self
             .core
             .applet
@@ -958,7 +1148,7 @@ impl IcedWorkspacesApplet {
         .align_y(Alignment::Center)
         .into();
 
-        let content: Element<'_, Message> = if apps.is_empty() {
+        let content: Element<'_, Message> = if icons.is_empty() {
             number
         } else {
             let app_group: Element<'_, Message> = container(app_strip)
@@ -981,6 +1171,7 @@ impl IcedWorkspacesApplet {
                             Self::workspace_divider_style(
                                 theme,
                                 active,
+                                urgent,
                                 outlined_mode,
                                 hovered,
                             )
@@ -999,6 +1190,7 @@ impl IcedWorkspacesApplet {
                             Self::workspace_divider_style(
                                 theme,
                                 active,
+                                urgent,
                                 outlined_mode,
                                 hovered,
                             )
@@ -1012,7 +1204,7 @@ impl IcedWorkspacesApplet {
             }
         };
 
-        let has_apps = !apps.is_empty();
+        let has_apps = !icons.is_empty();
         let pill_background: Element<'_, Message> = container(
             container(space::horizontal())
                 .width(Length::Fill)
@@ -1025,6 +1217,7 @@ impl IcedWorkspacesApplet {
                         hovered,
                         outlined_mode,
                         outlined_border_width,
+                        self.config.inactive_pill_contrast_percent,
                     )
                 }))),
         )
@@ -1047,6 +1240,7 @@ impl IcedWorkspacesApplet {
                     hovered,
                     outlined_mode,
                     outlined_border_width,
+                    self.config.inactive_pill_contrast_percent,
                 );
                 container::Style {
                     text_color: pill_style.text_color,
@@ -1079,17 +1273,146 @@ impl IcedWorkspacesApplet {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{
+        DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT, MAX_VISIBLE_ICONS, MIN_VISIBLE_ICONS,
+    };
+
     use super::{
         APP_GROUP_LEADING_PADDING, APP_GROUP_TRAILING_PADDING, APP_ICON_SPACING, Background, Color,
-        INACTIVE_PILL_BACKGROUND_OPACITY, INACTIVE_PILL_HOVER_BACKGROUND_OPACITY,
-        IcedWorkspacesApplet, Layout, MAX_PILL_BORDER_WIDTH, MIN_PILL_BORDER_WIDTH, Theme,
-        WORKSPACE_CONTENT_SPACING, WORKSPACE_LEADING_PADDING, WORKSPACE_LIST_EDGE_PADDING,
-        WORKSPACE_TRAILING_PADDING, informative_titles, occupied_number_section_major_size,
-        oriented_padding, pill_border_width, pill_spacing_percent, workspace_list_padding,
-        workspace_number_font_size, workspace_overview_command,
+        IcedWorkspacesApplet, Layout, MAX_INACTIVE_PILL_CONTRAST_PERCENT, MAX_PILL_BORDER_WIDTH,
+        MIN_PILL_BORDER_WIDTH, Theme, URGENT_FILLED_BORDER_WIDTH, WORKSPACE_CONTENT_SPACING,
+        WORKSPACE_LEADING_PADDING, WORKSPACE_LIST_EDGE_PADDING, WORKSPACE_TRAILING_PADDING,
+        AppMetadata, WorkspaceApp, WorkspaceWindowState, display_icons,
+        inactive_pill_contrast_color, inactive_pill_contrast_percent, informative_titles,
+        occupied_number_section_major_size, oriented_padding, pill_border_width,
+        pill_spacing_percent, should_retain_toplevel_placement, visible_icon_counts,
+        visible_icon_limit, workspace_list_padding, workspace_number_font_size,
+        workspace_overview_command, workspace_tooltip,
     };
 
     const TEST_OUTLINED_BORDER_WIDTH: f32 = 2.0;
+
+    fn test_app<'a>(
+        app_id: &'a str,
+        metadata: &'a AppMetadata,
+        windows: Vec<WorkspaceWindowState>,
+    ) -> WorkspaceApp<'a> {
+        WorkspaceApp {
+            app_id,
+            metadata,
+            minimized_titles: Vec::new(),
+            windows,
+        }
+    }
+
+    fn test_metadata(name: &str) -> AppMetadata {
+        AppMetadata {
+            name: name.to_owned(),
+            icon_source: cosmic::desktop::fde::IconSource::from_unknown(name),
+        }
+    }
+
+    #[test]
+    fn groups_multiple_windows_into_one_icon_by_default() {
+        let metadata = test_metadata("Browser");
+        let apps = [test_app(
+            "browser",
+            &metadata,
+            vec![
+                WorkspaceWindowState {
+                    minimized: true,
+                    maximized: false,
+                },
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: true,
+                },
+            ],
+        )];
+
+        let icons = display_icons(&apps, true);
+
+        assert_eq!(icons.len(), 1);
+        assert!(!icons[0].minimized);
+        assert!(icons[0].maximized);
+    }
+
+    #[test]
+    fn expands_windows_and_preserves_each_windows_state() {
+        let browser = test_metadata("Browser");
+        let editor = test_metadata("Editor");
+        let apps = [
+            test_app(
+                "browser",
+                &browser,
+                vec![
+                    WorkspaceWindowState {
+                        minimized: true,
+                        maximized: false,
+                    },
+                    WorkspaceWindowState {
+                        minimized: false,
+                        maximized: true,
+                    },
+                ],
+            ),
+            test_app(
+                "editor",
+                &editor,
+                vec![WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                }],
+            ),
+        ];
+
+        let icons = display_icons(&apps, false);
+
+        assert_eq!(icons.len(), 3);
+        assert_eq!(icons[0].metadata.name, "Browser");
+        assert_eq!((icons[0].minimized, icons[0].maximized), (true, false));
+        assert_eq!(icons[1].metadata.name, "Browser");
+        assert_eq!((icons[1].minimized, icons[1].maximized), (false, true));
+        assert_eq!(icons[2].metadata.name, "Editor");
+    }
+
+    #[test]
+    fn limits_icon_slots_and_reports_the_remaining_count() {
+        assert_eq!(visible_icon_counts(0, 5), (0, 0));
+        assert_eq!(visible_icon_counts(5, 5), (5, 0));
+        assert_eq!(visible_icon_counts(8, 5), (5, 3));
+        assert_eq!(visible_icon_counts(8, 3), (3, 5));
+        assert_eq!(visible_icon_counts(20, 16), (16, 4));
+    }
+
+    #[test]
+    fn clamps_visible_icon_limit_to_the_supported_range() {
+        assert_eq!(visible_icon_limit(0), MIN_VISIBLE_ICONS);
+        assert_eq!(visible_icon_limit(5), 5);
+        assert_eq!(visible_icon_limit(u8::MAX), MAX_VISIBLE_ICONS);
+    }
+
+    #[test]
+    fn keeps_tooltips_grouped_when_icons_are_expanded_per_window() {
+        let browser = test_metadata("Browser");
+        let apps = [test_app(
+            "browser",
+            &browser,
+            vec![
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                },
+                WorkspaceWindowState {
+                    minimized: false,
+                    maximized: false,
+                },
+            ],
+        )];
+
+        assert_eq!(display_icons(&apps, false).len(), 2);
+        assert_eq!(workspace_tooltip(&apps), "Browser ×2");
+    }
 
     fn test_pill_style(
         theme: &Theme,
@@ -1105,6 +1428,33 @@ mod tests {
             hovered,
             outlined_mode,
             TEST_OUTLINED_BORDER_WIDTH,
+            DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
+        )
+    }
+
+    #[test]
+    fn retains_only_transient_non_sticky_toplevel_placements() {
+        assert!(should_retain_toplevel_placement(0, Some(1), false));
+        assert!(!should_retain_toplevel_placement(1, Some(1), false));
+        assert!(!should_retain_toplevel_placement(0, Some(0), false));
+        assert!(!should_retain_toplevel_placement(0, None, false));
+        assert!(!should_retain_toplevel_placement(0, Some(1), true));
+    }
+
+    fn test_pill_style_with_contrast(
+        theme: &Theme,
+        hovered: bool,
+        outlined_mode: bool,
+        contrast_percent: u8,
+    ) -> cosmic::widget::container::Style {
+        IcedWorkspacesApplet::workspace_pill_style(
+            theme,
+            false,
+            false,
+            hovered,
+            outlined_mode,
+            TEST_OUTLINED_BORDER_WIDTH,
+            contrast_percent,
         )
     }
 
@@ -1153,11 +1503,17 @@ mod tests {
         let style = test_pill_style(&theme, false, false, false, false);
 
         let Some(Background::Color(background)) = style.background else {
-            panic!("inactive pill should have a solid translucent background");
+            panic!("inactive pill should have a solid opaque background");
         };
-        let mut expected = Color::from(theme.current_container().component.hover);
-        expected.a = INACTIVE_PILL_BACKGROUND_OPACITY;
+        let container = theme.current_container();
+        let component = &container.component;
+        let expected = inactive_pill_contrast_color(
+            container.base,
+            component.border,
+            DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
+        );
         assert_eq!(background, expected);
+        assert_eq!(background.a, 1.0);
     }
 
     #[test]
@@ -1166,11 +1522,16 @@ mod tests {
         let style = test_pill_style(&theme, false, false, true, false);
 
         let Some(Background::Color(background)) = style.background else {
-            panic!("hovered inactive pill should have a solid translucent background");
+            panic!("hovered inactive pill should have a solid opaque background");
         };
-        let mut expected = Color::from(theme.current_container().component.hover);
-        expected.a = INACTIVE_PILL_HOVER_BACKGROUND_OPACITY;
+        let component = &theme.current_container().component;
+        let expected = inactive_pill_contrast_color(
+            component.hover,
+            component.border,
+            inactive_pill_contrast_percent(DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT, true),
+        );
         assert_eq!(background, expected);
+        assert_eq!(background.a, 1.0);
     }
 
     #[test]
@@ -1178,10 +1539,16 @@ mod tests {
         let theme = Theme::default();
         let style = test_pill_style(&theme, false, false, false, true);
 
-        let mut expected = Color::from(theme.current_container().component.hover);
-        expected.a = INACTIVE_PILL_BACKGROUND_OPACITY;
+        let container = theme.current_container();
+        let component = &container.component;
+        let expected = inactive_pill_contrast_color(
+            container.base,
+            component.border,
+            DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
+        );
         assert_eq!(style.background, None);
         assert_eq!(style.border.color, expected);
+        assert_eq!(style.border.color.a, 1.0);
         assert_eq!(style.border.width, TEST_OUTLINED_BORDER_WIDTH);
     }
 
@@ -1193,10 +1560,15 @@ mod tests {
             (true, false, false),
             (false, false, false),
             (false, true, false),
-            (true, false, true),
         ] {
             let style = IcedWorkspacesApplet::workspace_pill_style(
-                &theme, active, urgent, hovered, true, 3.0,
+                &theme,
+                active,
+                urgent,
+                hovered,
+                true,
+                3.0,
+                DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
             );
             assert_eq!(style.border.width, 3.0);
         }
@@ -1207,20 +1579,135 @@ mod tests {
         let theme = Theme::default();
         let style = test_pill_style(&theme, false, false, true, true);
 
-        let mut expected = Color::from(theme.current_container().component.hover);
-        expected.a = INACTIVE_PILL_HOVER_BACKGROUND_OPACITY;
+        let component = &theme.current_container().component;
+        let expected = inactive_pill_contrast_color(
+            component.hover,
+            component.border,
+            inactive_pill_contrast_percent(DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT, true),
+        );
         assert_eq!(style.background, Some(Background::Color(expected)));
         assert_eq!(style.border.color, expected);
-        assert_eq!(style.border.width, TEST_OUTLINED_BORDER_WIDTH);
+        assert_eq!(style.border.width, 0.0);
     }
 
     #[test]
-    fn matches_each_hovered_outlined_border_to_its_own_background() {
+    fn applies_configured_contrast_to_filled_and_outlined_inactive_pills() {
+        let theme = Theme::default();
+        let container = theme.current_container();
+        let component = &container.component;
+
+        for outlined_mode in [false, true] {
+            for (configured, resting_contrast, hovered_contrast) in
+                [(55, 55, 70), (90, 90, 100), (0, 0, 15)]
+            {
+                let resting =
+                    test_pill_style_with_contrast(&theme, false, outlined_mode, configured);
+                let hovered =
+                    test_pill_style_with_contrast(&theme, true, outlined_mode, configured);
+
+                let resting_color = inactive_pill_contrast_color(
+                    container.base,
+                    component.border,
+                    resting_contrast,
+                );
+                let hovered_color = inactive_pill_contrast_color(
+                    component.hover,
+                    component.border,
+                    hovered_contrast,
+                );
+
+                if outlined_mode {
+                    assert_eq!(resting.background, None);
+                    assert_eq!(resting.border.color, resting_color);
+                } else {
+                    assert_eq!(resting.background, Some(Background::Color(resting_color)));
+                }
+                assert_eq!(hovered.background, Some(Background::Color(hovered_color)));
+                if outlined_mode {
+                    assert_eq!(hovered.border.color, hovered_color);
+                }
+                assert_eq!(resting_color.a, 1.0);
+                assert_eq!(hovered_color.a, 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn uses_opaque_theme_tokens_at_the_contrast_endpoints() {
+        let theme = Theme::default();
+        let container = theme.current_container();
+        let component = &container.component;
+
+        let minimum =
+            inactive_pill_contrast_color(container.base, component.border, 0);
+        let maximum =
+            inactive_pill_contrast_color(container.base, component.border, 100);
+
+        assert_eq!(minimum, Color::from(container.base.color));
+        assert_eq!(maximum, Color::from(component.border.color));
+        assert_eq!(minimum.a, 1.0);
+        assert_eq!(maximum.a, 1.0);
+    }
+
+    #[test]
+    fn derives_hover_contrast_from_the_configured_resting_contrast() {
+        assert_eq!(inactive_pill_contrast_percent(55, false), 55);
+        assert_eq!(inactive_pill_contrast_percent(55, true), 70);
+        assert_eq!(inactive_pill_contrast_percent(90, false), 90);
+        assert_eq!(inactive_pill_contrast_percent(90, true), 100);
+        assert_eq!(inactive_pill_contrast_percent(0, false), 0);
+        assert_eq!(inactive_pill_contrast_percent(0, true), 15);
+    }
+
+    #[test]
+    fn clamps_inactive_pill_contrast_to_one_hundred_percent() {
+        assert_eq!(inactive_pill_contrast_percent(100, false), 100);
+        assert_eq!(
+            inactive_pill_contrast_percent(u8::MAX, false),
+            MAX_INACTIVE_PILL_CONTRAST_PERCENT
+        );
+        assert_eq!(inactive_pill_contrast_percent(u8::MAX, true), 100);
+    }
+
+    #[test]
+    fn keeps_active_and_urgent_styles_independent_of_inactive_contrast() {
+        let theme = Theme::default();
+
+        for (active, urgent, hovered, outlined_mode) in [
+            (true, false, false, false),
+            (true, false, true, true),
+            (false, true, false, false),
+            (false, true, true, true),
+        ] {
+            let minimum_contrast = IcedWorkspacesApplet::workspace_pill_style(
+                &theme,
+                active,
+                urgent,
+                hovered,
+                outlined_mode,
+                TEST_OUTLINED_BORDER_WIDTH,
+                0,
+            );
+            let maximum_contrast = IcedWorkspacesApplet::workspace_pill_style(
+                &theme,
+                active,
+                urgent,
+                hovered,
+                outlined_mode,
+                TEST_OUTLINED_BORDER_WIDTH,
+                100,
+            );
+
+            assert_eq!(minimum_contrast, maximum_contrast);
+        }
+    }
+
+    #[test]
+    fn matches_nonurgent_hovered_outlined_borders_to_their_backgrounds() {
         let theme = Theme::default();
         let styles = [
             test_pill_style(&theme, true, false, true, true),
             test_pill_style(&theme, false, false, true, true),
-            test_pill_style(&theme, false, true, true, true),
         ];
 
         for style in styles {
@@ -1228,6 +1715,41 @@ mod tests {
                 panic!("hovered outlined pill should have a solid background");
             };
             assert_eq!(style.border.color, background);
+        }
+    }
+
+    #[test]
+    fn removes_the_redundant_outline_when_an_outlined_pill_is_filled_on_hover() {
+        let theme = Theme::default();
+
+        for (active, urgent) in [(true, false), (false, false)] {
+            let style = test_pill_style(&theme, active, urgent, true, true);
+            assert!(style.background.is_some());
+            assert_eq!(style.border.width, 0.0);
+        }
+    }
+
+    #[test]
+    fn gives_urgent_pills_a_destructive_text_and_border() {
+        let theme = Theme::default();
+        let destructive = Color::from(theme.cosmic().destructive_button.base);
+
+        for outlined_mode in [false, true] {
+            for hovered in [false, true] {
+                let style = test_pill_style(&theme, false, true, hovered, outlined_mode);
+
+                assert_eq!(style.text_color, Some(destructive));
+                assert_eq!(style.icon_color, Some(destructive));
+                assert_eq!(style.border.color, destructive);
+                assert_eq!(
+                    style.border.width,
+                    if outlined_mode {
+                        TEST_OUTLINED_BORDER_WIDTH
+                    } else {
+                        URGENT_FILLED_BORDER_WIDTH
+                    }
+                );
+            }
         }
     }
 
@@ -1274,7 +1796,7 @@ mod tests {
         assert_eq!(style.background, Some(Background::Color(expected)));
         assert_eq!(style.border.color, theme.cosmic().accent_button.hover.into());
         assert_eq!(style.text_color, Some(theme.cosmic().accent_button.on.into()));
-        assert_eq!(style.border.width, TEST_OUTLINED_BORDER_WIDTH);
+        assert_eq!(style.border.width, 0.0);
     }
 
     #[test]
@@ -1300,7 +1822,8 @@ mod tests {
     #[test]
     fn gives_the_active_divider_an_accent_color_in_outlined_mode() {
         let theme = Theme::default();
-        let style = IcedWorkspacesApplet::workspace_divider_style(&theme, true, true, false);
+        let style =
+            IcedWorkspacesApplet::workspace_divider_style(&theme, true, false, true, false);
         let expected = theme
             .cosmic()
             .accent_text
@@ -1312,12 +1835,37 @@ mod tests {
     #[test]
     fn gives_the_active_divider_an_on_accent_color_when_hovered() {
         let theme = Theme::default();
-        let style = IcedWorkspacesApplet::workspace_divider_style(&theme, true, true, true);
+        let style =
+            IcedWorkspacesApplet::workspace_divider_style(&theme, true, false, true, true);
 
         assert_eq!(
             style.background,
             Some(Background::Color(theme.cosmic().accent_button.on.into()))
         );
+    }
+
+    #[test]
+    fn gives_the_urgent_divider_a_destructive_color() {
+        let theme = Theme::default();
+
+        for outlined_mode in [false, true] {
+            for hovered in [false, true] {
+                let style = IcedWorkspacesApplet::workspace_divider_style(
+                    &theme,
+                    false,
+                    true,
+                    outlined_mode,
+                    hovered,
+                );
+
+                assert_eq!(
+                    style.background,
+                    Some(Background::Color(
+                        theme.cosmic().destructive_button.base.into()
+                    ))
+                );
+            }
+        }
     }
 
     #[test]
@@ -1397,9 +1945,12 @@ enum Message {
     PopupClosed(window::Id),
     DimMinimizedWindowIcons(bool),
     HighlightMaximizedWindowIcons(bool),
+    ShowOneIconPerApplication(bool),
+    MaxVisibleIcons(u8),
     PillStyle(segmented_button::Entity),
     PillBorderWidth(u8),
     PillSpacing(u8),
+    InactivePillContrast(u8),
     ConfigUpdated(WorkspacesAppletConfig),
     Surface(surface::Action),
 }
@@ -1415,16 +1966,18 @@ impl cosmic::Application for IcedWorkspacesApplet {
         let mut config = config_helper
             .as_ref()
             .map(|helper| {
-                WorkspacesAppletConfig::get_entry(helper).unwrap_or_else(|(errors, config)| {
-                    for err in errors {
-                        tracing::error!(?err, "failed to load workspaces applet config entry");
-                    }
-                    config
-                })
+                let (config, errors) = WorkspacesAppletConfig::load(helper);
+                for err in errors {
+                    tracing::error!(?err, "failed to load workspaces applet config entry");
+                }
+                config
             })
             .unwrap_or_default();
         config.pill_border_width = pill_border_width(config.pill_border_width);
         config.pill_spacing_percent = pill_spacing_percent(config.pill_spacing_percent);
+        config.max_visible_icons = visible_icon_limit(config.max_visible_icons);
+        config.inactive_pill_contrast_percent =
+            inactive_pill_contrast_percent(config.inactive_pill_contrast_percent, false);
         let pill_style_model = pill_style_model(config.pill_style);
 
         let mut app = Self {
@@ -1473,6 +2026,10 @@ impl cosmic::Application for IcedWorkspacesApplet {
                     snapshot
                         .workspaces
                         .sort_by(|w1, w2| w1.coordinates.cmp(&w2.coordinates));
+                    retain_transient_toplevel_placements(
+                        &self.toplevels,
+                        &mut snapshot.toplevels,
+                    );
                     self.workspaces = snapshot.workspaces;
                     self.toplevels = snapshot.toplevels;
                     self.output = snapshot.output;
@@ -1546,6 +2103,14 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 self.config.highlight_maximized_window_icons = enabled;
                 self.write_config();
             }
+            Message::ShowOneIconPerApplication(enabled) => {
+                self.config.show_one_icon_per_application = enabled;
+                self.write_config();
+            }
+            Message::MaxVisibleIcons(limit) => {
+                self.config.max_visible_icons = visible_icon_limit(limit);
+                self.write_config();
+            }
             Message::PillStyle(entity) => {
                 if let Some(style) = self
                     .pill_style_model
@@ -1565,9 +2130,17 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 self.config.pill_spacing_percent = pill_spacing_percent(percent);
                 self.write_config();
             }
+            Message::InactivePillContrast(percent) => {
+                self.config.inactive_pill_contrast_percent =
+                    inactive_pill_contrast_percent(percent, false);
+                self.write_config();
+            }
             Message::ConfigUpdated(mut config) => {
                 config.pill_border_width = pill_border_width(config.pill_border_width);
                 config.pill_spacing_percent = pill_spacing_percent(config.pill_spacing_percent);
+                config.max_visible_icons = visible_icon_limit(config.max_visible_icons);
+                config.inactive_pill_contrast_percent =
+                    inactive_pill_contrast_percent(config.inactive_pill_contrast_percent, false);
                 self.config = config;
                 self.sync_pill_style_model();
             }
@@ -1591,15 +2164,16 @@ impl cosmic::Application for IcedWorkspacesApplet {
             let horizontal = self.core.applet.is_horizontal();
             let active = w.state.contains(ext_workspace_handle_v1::State::Active);
             let apps = self.apps_for_workspace(w);
-            let major_size = self.workspace_button_major_size(w);
+            let icons = display_icons(&apps, self.config.show_one_icon_per_application);
+            let major_size = self.workspace_button_major_size(&icons);
             let (width, height) = if horizontal {
                 (major_size, suggested_window_size.1.get() as f32)
             } else {
                 (suggested_window_size.0.get() as f32, major_size)
             };
-            let has_apps = !apps.is_empty();
-            let normal = self.workspace_pill_visual(w, &apps, width, height, false);
-            let hovered = self.workspace_pill_visual(w, &apps, width, height, true);
+            let has_apps = !icons.is_empty();
+            let normal = self.workspace_pill_visual(w, &icons, width, height, false);
+            let hovered = self.workspace_pill_visual(w, &icons, width, height, true);
             let btn = button(hover_switch(normal, hovered))
                 .width(Length::Fixed(width))
                 .height(Length::Fixed(height))
@@ -1612,7 +2186,7 @@ impl cosmic::Application for IcedWorkspacesApplet {
                 .class(cosmic::theme::iced::Button::Transparent);
 
             let workspace_button: Element<'_, Message> = if has_apps {
-                let tooltip = self.workspace_tooltip(&apps);
+                let tooltip = workspace_tooltip(&apps);
                 self.core
                     .applet
                     .applet_tooltip(btn, tooltip, false, Message::Surface, None)
@@ -1692,16 +2266,10 @@ impl cosmic::Application for IcedWorkspacesApplet {
         let outline_thickness: Element<'_, Message> =
             if self.config.pill_style == WorkspacePillStyle::Outlined {
                 row![
-                    container(
-                        self.core
-                            .applet
-                            .text(crate::fl!("pill-outline-thickness"))
-                            .size(14)
-                    )
-                    .padding(Padding {
-                        left: f32::from(spacing.space_s),
-                        ..Padding::ZERO
-                    }),
+                    self.core
+                        .applet
+                        .text(crate::fl!("pill-outline-thickness"))
+                        .size(14),
                     space::horizontal(),
                     self.pill_border_width_stepper()
                 ]
@@ -1719,8 +2287,6 @@ impl cosmic::Application for IcedWorkspacesApplet {
                     .text_size(14)
                     .width(Length::Fill)
             ),
-            padded_control(divider::horizontal::default())
-                .padding([spacing.space_xxs, spacing.space_s]),
             padded_control(
                 toggler(self.config.highlight_maximized_window_icons)
                     .on_toggle(Message::HighlightMaximizedWindowIcons)
@@ -1728,34 +2294,59 @@ impl cosmic::Application for IcedWorkspacesApplet {
                     .text_size(14)
                     .width(Length::Fill)
             ),
-            padded_control(divider::horizontal::default())
-                .padding([spacing.space_xxs, spacing.space_s]),
             padded_control(
-                column![
-                    self.core.applet.text(crate::fl!("pill-style")).size(14),
-                    segmented_control::horizontal(&self.pill_style_model)
-                        .width(Length::Fill)
-                        .on_activate(Message::PillStyle),
-                    outline_thickness
-                ]
-                .spacing(spacing.space_xxs)
-                .align_x(Alignment::Start)
-            )
-            .padding([0, spacing.space_m]),
-            padded_control(divider::horizontal::default())
-                .padding([spacing.space_xxs, spacing.space_s]),
+                toggler(self.config.show_one_icon_per_application)
+                    .on_toggle(Message::ShowOneIconPerApplication)
+                    .label(crate::fl!("show-one-icon-per-application"))
+                    .text_size(14)
+                    .width(Length::Fill)
+            ),
             padded_control(
                 row![
                     self.core
                         .applet
-                        .text(crate::fl!("pill-spacing"))
+                        .text(crate::fl!("max-visible-icons"))
                         .size(14),
                     space::horizontal(),
-                    self.pill_spacing_stepper()
+                    self.max_visible_icons_stepper()
                 ]
                 .align_y(Alignment::Center)
-            )
-            .padding([0, spacing.space_m]),
+            ),
+            padded_control(divider::horizontal::default())
+                .padding([spacing.space_xxs, spacing.space_s]),
+            padded_control(
+                column![
+                    column![
+                        self.core.applet.text(crate::fl!("pill-style")).size(14),
+                        segmented_control::horizontal(&self.pill_style_model)
+                            .width(Length::Fill)
+                            .on_activate(Message::PillStyle),
+                        outline_thickness
+                    ]
+                    .spacing(spacing.space_xxs)
+                    .align_x(Alignment::Start),
+                    row![
+                        self.core
+                            .applet
+                            .text(crate::fl!("pill-spacing"))
+                            .size(14),
+                        space::horizontal(),
+                        self.pill_spacing_stepper()
+                    ]
+                    .align_y(Alignment::Center),
+                    row![
+                        self.core
+                            .applet
+                            .text(crate::fl!("inactive-pill-contrast"))
+                            .size(14),
+                        space::horizontal(),
+                        self.inactive_pill_contrast_stepper()
+                    ]
+                    .align_y(Alignment::Center)
+                ]
+                .spacing(spacing.space_xxs)
+                .align_x(Alignment::Start)
+            ),
             version
         ]
         .align_x(Alignment::Start)

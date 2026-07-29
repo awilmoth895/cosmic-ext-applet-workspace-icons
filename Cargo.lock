@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-ext-applet-workspace-icons"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "cosmic-client-toolkit",
@@ -949,6 +949,8 @@ dependencies = [
  "libcosmic",
  "rust-embed",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-log",

@@ -1,9 +1,12 @@
 cosmic-ext-applet-workspace-icons = Workspace Icons
 dim-minimized-window-icons = Dim minimised window icons
 highlight-maximized-window-icons = Highlight maximised window icons
+show-one-icon-per-application = Show one icon per application
+max-visible-icons = Limit the number of icons to
 pill-style = Pill style
 pill-style-filled = Filled
 pill-style-outlined = Outlined
 pill-outline-thickness = Outline thickness
 pill-spacing = Pill spacing
+inactive-pill-contrast = Inactive pill contrast
 version = Version

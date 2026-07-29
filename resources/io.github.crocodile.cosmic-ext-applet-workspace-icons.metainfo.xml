@@ -83,6 +83,27 @@
     <keyword xml:lang="cs">Ikony</keyword>
   </keywords>
   <releases>
+    <release type="stable" version="1.2.0" date="2026-07-29">
+      <description>
+        <ul>
+          <li>Option to show an icon for each window of the same app</li>
+          <li>Configurable inactive pill contrast to suit different themes</li>
+          <li>Configurable 1–16 icon limit before remaining icons are shown as +N</li>
+          <li>Fixes missing frosted glass blur on settings popup</li>
+          <li>Fixes icons disappearing while dragging windows</li>
+          <li>COSMIC-aligned pill colours and urgent-workspace styling (Wayland urgent state)</li>
+        </ul>
+      </description>
+    </release>
+    <release type="stable" version="1.1.2" date="2026-07-25">
+      <description>
+        <ul>
+          <li>Add configurable inactive workspace pill opacity.</li>
+          <li>Align inactive and urgent pill styling with COSMIC theme colours.</li>
+          <li>Polish the settings popup layout and apply its frosted-glass blur.</li>
+        </ul>
+      </description>
+    </release>
     <release type="stable" version="1.1.1" date="2026-07-21">
       <description>
         <ul>
