@@ -1,3 +1,9 @@
 cosmic-ext-applet-workspace-icons = Ikony pracovních ploch
 dim-minimized-window-icons = Ztlumit ikony minimalizovaných oken
 highlight-maximized-window-icons = Zvýraznit ikony maximalizovaných oken
+pill-style = Styl indikátorů
+pill-style-filled = Plný
+pill-style-outlined = Obrysový
+pill-outline-thickness = Tloušťka obrysu
+pill-spacing = Rozestupy mezi indikátory
+version = Verze
