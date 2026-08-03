@@ -1,1 +1,12 @@
-cosmic-applet-workspaces = Obszary robocze COSMIC
+cosmic-ext-applet-workspace-icons = Ikony Obszarów Roboczych
+dim-minimized-window-icons = Przygaś ikony zminimalizowanych okien
+highlight-maximized-window-icons = Wyróżnij ikony zmaksymalizowanych okien
+show-one-icon-per-application = Pokaż tylko jedną ikonę na aplikację
+max-visible-icons = Ogranicz liczbę  ikon do
+pill-style = Styl wskaźnika
+pill-style-filled = Wypełnione
+pill-style-outlined = Obrysowane
+pill-outline-thickness = Grubość obrysu
+pill-spacing = Odstępy między wskaźnikami
+inactive-pill-contrast = Kontrast nieaktywnych wskaźników
+version = Wersja
