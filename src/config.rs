@@ -40,6 +40,7 @@ pub struct WorkspacesAppletConfig {
     pub pill_border_width: u8,
     pub pill_spacing_percent: u8,
     pub inactive_pill_contrast_percent: u8,
+    pub show_inactive_pill_background: bool,
 }
 
 impl Default for WorkspacesAppletConfig {
@@ -53,6 +54,7 @@ impl Default for WorkspacesAppletConfig {
             pill_border_width: DEFAULT_PILL_BORDER_WIDTH,
             pill_spacing_percent: 0,
             inactive_pill_contrast_percent: DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
+            show_inactive_pill_background: true,
         }
     }
 }
@@ -175,7 +177,7 @@ mod tests {
         .expect("version three config");
         config
             .set(
-                "inactive_pill_contrast_percent",
+                "inactive__contrast_percent",
                 DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
             )
             .expect("existing contrast setting");
