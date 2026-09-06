@@ -177,7 +177,7 @@ mod tests {
         .expect("version three config");
         config
             .set(
-                "inactive__contrast_percent",
+                "inactive_pill_contrast_percent",
                 DEFAULT_INACTIVE_PILL_CONTRAST_PERCENT,
             )
             .expect("existing contrast setting");

@@ -2296,7 +2296,7 @@ impl cosmic::Application for IcedWorkspacesApplet {
             if self.config.pill_style == WorkspacePillStyle::Filled {
                 toggler(self.config.show_inactive_pill_background)
                     .on_toggle(Message::ShowInactivePillBackground)
-                    .label(crate::fl!("show-inactive-pill-backgound"))
+                    .label(crate::fl!("show-inactive-pill-background"))
                     .text_size(14)
                     .width(Length::Fill).into()
             } else {
